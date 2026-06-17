@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,10 @@ GOOGLE_SOURCE_KEY = "larkSourceId"
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 
+class GoogleAuthorizationError(RuntimeError):
+    pass
+
+
 def build_google_service(config: GoogleConfig) -> Any:
     credentials = load_credentials(config.credentials_path, config.token_path)
     return build("calendar", "v3", credentials=credentials)
@@ -32,11 +37,35 @@ def load_credentials(credentials_path: Path, token_path: Path) -> Credentials:
 
     if not credentials or not credentials.valid:
         flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), SCOPES)
-        credentials = flow.run_local_server(port=0)
+        try:
+            credentials = flow.run_local_server(port=0)
+        except webbrowser.Error:
+            credentials = _run_manual_authorization(flow)
 
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(credentials.to_json(), encoding="utf-8")
     return credentials
+
+
+def _run_manual_authorization(flow: InstalledAppFlow) -> Credentials:
+    flow.redirect_uri = "http://localhost"
+    authorization_url, _ = flow.authorization_url(prompt="consent")
+    print("No runnable browser was found on this system.")
+    print("Open this URL in a browser on another machine:")
+    print(authorization_url)
+    print("After Google redirects to localhost, copy the full redirected URL.")
+    try:
+        authorization_response = input("Paste the full redirected URL: ").strip()
+    except EOFError as exc:
+        raise GoogleAuthorizationError(
+            "Google authorization requires a browser or a pasted redirected URL."
+        ) from exc
+    if not authorization_response:
+        raise GoogleAuthorizationError(
+            "Google authorization requires the full redirected URL."
+        )
+    flow.fetch_token(authorization_response=authorization_response)
+    return flow.credentials
 
 
 def event_to_google_body(event: CalendarEvent) -> dict[str, Any]:
@@ -126,4 +155,3 @@ def _parse_optional_datetime(raw: str | None) -> datetime | None:
 
 def _parse_datetime(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-

@@ -65,6 +65,11 @@ ${XDG_CONFIG_HOME:-~/.config}/lark-google-calendar-sync/google.credentials.json
 When the wizard asks for `Google OAuth client JSON path`, enter the full local
 path to that downloaded JSON file.
 
+On a system without a runnable browser, choose to authorize when prompted. The
+tool prints a Google authorization URL. Open that URL in a browser on another
+machine, finish Google authorization, then copy the full final URL that starts
+with `http://localhost` back into the terminal prompt.
+
 ## Usage
 
 Create a Google OAuth desktop client JSON file in Google Cloud Console, then run:

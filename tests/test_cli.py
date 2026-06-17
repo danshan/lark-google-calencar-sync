@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 
 from cal_sync.cli import app
 from cal_sync.config import AppConfig, CaldavConfig, GoogleConfig
+from cal_sync.google_calendar import GoogleAuthorizationError
 from cal_sync.lark_caldav import LarkCaldavAuthenticationError
 
 
@@ -77,4 +78,19 @@ def test_init_reports_auth_error_without_traceback(monkeypatch):
 
     assert result.exit_code == 1
     assert "Lark CalDAV authorization failed" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_init_reports_google_auth_error_without_traceback(monkeypatch):
+    def run_init_wizard(config):
+        raise GoogleAuthorizationError(
+            "Google authorization requires a browser or a pasted redirected URL."
+        )
+
+    monkeypatch.setattr("cal_sync.cli.run_init_wizard", run_init_wizard)
+
+    result = CliRunner().invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert "Google authorization requires a browser" in result.output
     assert "Traceback" not in result.output

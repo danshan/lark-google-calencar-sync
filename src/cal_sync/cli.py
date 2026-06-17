@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from cal_sync.config import AppConfig
+from cal_sync.google_calendar import GoogleAuthorizationError
 from cal_sync.lark_caldav import LarkCaldavAuthenticationError, list_lark_calendars
 from cal_sync.runtime import sync_once
 from cal_sync.tui import run_init_wizard
@@ -50,7 +51,7 @@ def init(
 ) -> None:
     try:
         written = run_init_wizard(config)
-    except LarkCaldavAuthenticationError as exc:
+    except (GoogleAuthorizationError, LarkCaldavAuthenticationError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"Config saved to {config or written.default_path()}")
@@ -90,7 +91,7 @@ def sync(
             verbose=verbose,
             dump_lark_response_path=dump_lark_response,
         )
-    except LarkCaldavAuthenticationError as exc:
+    except (GoogleAuthorizationError, LarkCaldavAuthenticationError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     typer.echo(
