@@ -402,6 +402,63 @@ def test_list_lark_events_prefers_sync_token_object_loading(monkeypatch):
     assert calendar.search_called is False
 
 
+def test_list_lark_events_skips_sync_loaded_objects_without_vobject(monkeypatch, tmp_path):
+    class EmptyResult(FakeResult):
+        url = "https://caldav.example.com/calendars/alice/work/empty.ics"
+        data = None
+        vobject_instance = None
+
+    class SyncCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def get_objects_by_sync_token(
+            self,
+            *,
+            sync_token=None,
+            load_objects=False,
+            disable_fallback=False,
+        ):
+            return [EmptyResult(), FakeResult()]
+
+        def search(self, **kwargs):
+            raise AssertionError("search should not be called when sync-token returns objects")
+
+    class SyncClient(FakeClient):
+        def calendar(self, *, url):
+            return SyncCalendar()
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+    messages: list[str] = []
+    dump_path = tmp_path / "lark-response.txt"
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", SyncClient)
+
+    events = list_lark_events(
+        config,
+        datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+        progress=messages.append,
+        verbose=True,
+        dump_response_path=dump_path,
+        use_sync_token=True,
+    )
+
+    assert [event.source_id for event in events] == ["lark-1"]
+    assert (
+        "Skipped Lark CalDAV object: reason=missing vobject_instance "
+        "identity=url=https://caldav.example.com/calendars/alice/work/empty.ics"
+    ) in messages
+    dump = dump_path.read_text(encoding="utf-8")
+    assert "url: https://caldav.example.com/calendars/alice/work/empty.ics" in dump
+    assert "#### vobject_instance" in dump
+    assert "<missing>" in dump
+
+
 def test_list_lark_events_filters_sync_loaded_objects_locally(monkeypatch):
     class OutsideComponent(FakeComponent):
         def __init__(self):

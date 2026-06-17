@@ -122,12 +122,13 @@ def list_lark_events(
     if verbose:
         _report(progress, "Lark CalDAV selected raw results: %s", len(results))
 
-    events = [
-        event
-        for result in results
-        if (event := _caldav_result_to_event(result)) is not None
-        and _event_overlaps_window(event, start, end)
-    ]
+    events = _caldav_results_to_events(
+        results,
+        start,
+        end,
+        progress=progress,
+        verbose=verbose,
+    )
     if verbose and not events:
         _report(progress, "No Lark events returned by CalDAV search.")
     for event in events:
@@ -166,25 +167,62 @@ def _get_calendar(config: CaldavConfig) -> Any:
     return calendars[0]
 
 
-def _caldav_result_to_event(result: Any) -> CalendarEvent | None:
-    vobject_instance = result.vobject_instance
-    component = next(
-        (item for item in vobject_instance.components() if item.name == "VEVENT"),
-        None,
-    )
+def _caldav_results_to_events(
+    results: list[Any],
+    start: datetime,
+    end: datetime,
+    *,
+    progress: ProgressReporter | None,
+    verbose: bool,
+) -> list[CalendarEvent]:
+    events = []
+    for result in results:
+        event, skip_reason = _caldav_result_to_event(result)
+        if event is None:
+            _report_skipped_object(progress, verbose, result, skip_reason or "unparsed object")
+            continue
+        if not _event_overlaps_window(event, start, end):
+            _report_skipped_object(
+                progress,
+                verbose,
+                result,
+                f"outside sync window source_id={event.source_id}",
+            )
+            continue
+        events.append(event)
+    return events
+
+
+def _caldav_result_to_event(result: Any) -> tuple[CalendarEvent | None, str | None]:
+    vobject_instance = _safe_attr(result, "vobject_instance")
+    if vobject_instance is None:
+        return None, "missing vobject_instance"
+    components = getattr(vobject_instance, "components", None)
+    if not callable(components):
+        return None, "vobject_instance has no components"
+    try:
+        component = next((item for item in components() if item.name == "VEVENT"), None)
+    except Exception as exc:
+        return None, f"component iteration failed: {exc}"
     if component is None:
-        return None
-    uid = str(component.uid.value)
-    return CalendarEvent(
-        source_id=uid,
-        summary=_component_text(component, "summary"),
-        description=_component_text(component, "description"),
-        location=_component_text(component, "location"),
-        start=_as_datetime(component.dtstart.value),
-        end=_as_datetime(component.dtend.value),
-        updated_at=_optional_datetime(getattr(component, "last_modified", None)),
-        etag=getattr(result, "etag", None),
-    )
+        return None, "missing VEVENT component"
+    try:
+        uid = str(component.uid.value)
+        return (
+            CalendarEvent(
+                source_id=uid,
+                summary=_component_text(component, "summary"),
+                description=_component_text(component, "description"),
+                location=_component_text(component, "location"),
+                start=_as_datetime(component.dtstart.value),
+                end=_as_datetime(component.dtend.value),
+                updated_at=_optional_datetime(getattr(component, "last_modified", None)),
+                etag=_safe_attr(result, "etag"),
+            ),
+            None,
+        )
+    except Exception as exc:
+        return None, f"VEVENT parse failed: {exc}"
 
 
 def _component_text(component: Any, name: str) -> str:
@@ -334,7 +372,7 @@ def _dump_lark_response(
             _append_attr(lines, result, "id")
             _append_attr(lines, result, "canonical_url")
             _append_attr(lines, result, "data")
-            vobject_instance = getattr(result, "vobject_instance", None)
+            vobject_instance = _safe_attr(result, "vobject_instance")
             if vobject_instance is not None:
                 lines.extend(["", "#### vobject_instance.serialize()"])
                 serialize = getattr(vobject_instance, "serialize", None)
@@ -342,6 +380,8 @@ def _dump_lark_response(
                     lines.append(str(serialize()))
                 else:
                     lines.append(str(vobject_instance))
+            else:
+                lines.extend(["", "#### vobject_instance", "<missing>"])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -354,13 +394,53 @@ def _format_search_parameters(parameters: dict[str, object]) -> str:
 
 
 def _append_attr(lines: list[str], result: Any, name: str) -> None:
-    if not hasattr(result, name):
+    value = _safe_attr(result, name)
+    if value is None:
         return
-    value = getattr(result, name)
     if name == "data":
         lines.extend(["", "### data", str(value)])
     else:
         lines.append(f"{name}: {value}")
+
+
+def _safe_attr(result: Any, name: str) -> Any:
+    try:
+        return getattr(result, name)
+    except Exception as exc:
+        LOGGER.info(
+            "Lark CalDAV object attribute read failed: identity=%s attr=%s error=%s",
+            _result_identity(result),
+            name,
+            exc,
+        )
+        return None
+
+
+def _report_skipped_object(
+    progress: ProgressReporter | None,
+    verbose: bool,
+    result: Any,
+    reason: str,
+) -> None:
+    identity = _result_identity(result)
+    LOGGER.info("Skipped Lark CalDAV object: reason=%s identity=%s", reason, identity)
+    if verbose:
+        _report(progress, "Skipped Lark CalDAV object: reason=%s identity=%s", reason, identity)
+
+
+def _result_identity(result: Any) -> str:
+    for name in ("url", "id", "canonical_url", "etag"):
+        value = _safe_attr_without_logging(result, name)
+        if value:
+            return f"{name}={value}"
+    return f"type={type(result).__module__}.{type(result).__qualname__}"
+
+
+def _safe_attr_without_logging(result: Any, name: str) -> Any:
+    try:
+        return getattr(result, name)
+    except Exception:
+        return None
 
 
 def _report_event_detail(progress: ProgressReporter | None, event: CalendarEvent) -> None:
