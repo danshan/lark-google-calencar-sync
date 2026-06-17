@@ -42,13 +42,25 @@ def sync(
         bool,
         typer.Option("--verbose", "-v", help="Print detailed diagnostics while syncing."),
     ] = False,
+    dump_lark_response: Annotated[
+        Path | None,
+        typer.Option(
+            "--dump-lark-response",
+            help="Write raw Lark CalDAV search results to a local diagnostic file.",
+        ),
+    ] = None,
 ) -> None:
     app_config = AppConfig.load(config)
     if dry_run is not None:
         app_config.sync.dry_run = dry_run
 
     typer.echo(f"Writing sync log to {app_config.log_path}")
-    plan = sync_once(app_config, progress=typer.echo, verbose=verbose)
+    plan = sync_once(
+        app_config,
+        progress=typer.echo,
+        verbose=verbose,
+        dump_lark_response_path=dump_lark_response,
+    )
     typer.echo(
         f"create={len(plan.to_create)} update={len(plan.to_update)} "
         f"delete={len(plan.to_delete)} dry_run={app_config.sync.dry_run}"

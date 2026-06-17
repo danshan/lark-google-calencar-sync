@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from cal_sync.config import AppConfig
@@ -20,6 +21,7 @@ def sync_once(
     progress: ProgressReporter | None = None,
     *,
     verbose: bool = False,
+    dump_lark_response_path: Path | None = None,
 ) -> SyncPlan:
     configure_logging(config.log_path)
     start, end = sync_window(config.sync.past_days, config.sync.future_days)
@@ -33,6 +35,7 @@ def sync_once(
         end,
         progress=progress,
         verbose=verbose,
+        dump_response_path=dump_lark_response_path,
     )
     LOGGER.info("Loaded Lark events: count=%s", len(lark_events))
     _report(progress, "Loaded %s Lark events.", len(lark_events))

@@ -31,7 +31,9 @@ def test_sync_once_reports_progress_and_writes_log(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "cal_sync.runtime.list_lark_events",
-        lambda caldav, start, end, *, progress=None, verbose=False: [event],
+        lambda caldav, start, end, *, progress=None, verbose=False, dump_response_path=None: [
+            event
+        ],
     )
     monkeypatch.setattr("cal_sync.runtime.build_google_service", lambda google: object())
     monkeypatch.setattr(
@@ -69,11 +71,20 @@ def test_sync_once_passes_verbose_to_lark_loader(monkeypatch, tmp_path):
         sync=SyncConfig(dry_run=True),
         log_path=tmp_path / "sync.log",
     )
-    seen_verbose = None
+    dump_path = tmp_path / "lark-response.txt"
+    seen: dict[str, object] = {}
 
-    def list_lark_events(caldav, start, end, *, progress=None, verbose=False):
-        nonlocal seen_verbose
-        seen_verbose = verbose
+    def list_lark_events(
+        caldav,
+        start,
+        end,
+        *,
+        progress=None,
+        verbose=False,
+        dump_response_path=None,
+    ):
+        seen["verbose"] = verbose
+        seen["dump_response_path"] = dump_response_path
         return []
 
     monkeypatch.setattr(
@@ -90,6 +101,11 @@ def test_sync_once_passes_verbose_to_lark_loader(monkeypatch, tmp_path):
         lambda service, calendar_id, start, end: [],
     )
 
-    sync_once(config, progress=lambda message: None, verbose=True)
+    sync_once(
+        config,
+        progress=lambda message: None,
+        verbose=True,
+        dump_lark_response_path=dump_path,
+    )
 
-    assert seen_verbose is True
+    assert seen == {"verbose": True, "dump_response_path": dump_path}

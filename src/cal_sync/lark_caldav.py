@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from caldav import DAVClient
@@ -29,6 +30,7 @@ def list_lark_events(
     *,
     progress: ProgressReporter | None = None,
     verbose: bool = False,
+    dump_response_path: Path | None = None,
 ) -> list[CalendarEvent]:
     if verbose:
         _report(progress, "Lark CalDAV host: %s", config.host)
@@ -51,6 +53,15 @@ def list_lark_events(
 
     calendar = _get_calendar(config)
     results = calendar.search(start=start, end=end, event=True, expand=True)
+    if dump_response_path is not None:
+        _dump_lark_response(
+            dump_response_path,
+            config=config,
+            start=start,
+            end=end,
+            results=results,
+        )
+        _report(progress, "Wrote raw Lark CalDAV response dump to %s", dump_response_path)
     LOGGER.info("Lark CalDAV raw results: count=%s", len(results))
     if verbose:
         _report(progress, "Lark CalDAV raw results: %s", len(results))
@@ -119,6 +130,67 @@ def _as_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
     return isoparse(str(value))
+
+
+def _dump_lark_response(
+    path: Path,
+    *,
+    config: CaldavConfig,
+    start: datetime,
+    end: datetime,
+    results: list[Any],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Lark CalDAV response dump",
+        "",
+        "## Request",
+        f"host: {config.host}",
+        f"username: {config.username}",
+        f"calendar_url: {config.calendar_url or '<first calendar>'}",
+        f"start: {start.isoformat()}",
+        f"end: {end.isoformat()}",
+        "event: True",
+        "expand: True",
+        "",
+        "## Response",
+        f"raw_result_count: {len(results)}",
+    ]
+    if not results:
+        lines.append("No CalDAV object resources were returned by calendar.search().")
+
+    for index, result in enumerate(results, start=1):
+        lines.extend(
+            [
+                "",
+                f"## Result {index}",
+                f"type: {type(result).__module__}.{type(result).__qualname__}",
+            ]
+        )
+        _append_attr(lines, result, "url")
+        _append_attr(lines, result, "etag")
+        _append_attr(lines, result, "id")
+        _append_attr(lines, result, "canonical_url")
+        _append_attr(lines, result, "data")
+        vobject_instance = getattr(result, "vobject_instance", None)
+        if vobject_instance is not None:
+            lines.extend(["", "### vobject_instance.serialize()"])
+            serialize = getattr(vobject_instance, "serialize", None)
+            if callable(serialize):
+                lines.append(str(serialize()))
+            else:
+                lines.append(str(vobject_instance))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _append_attr(lines: list[str], result: Any, name: str) -> None:
+    if not hasattr(result, name):
+        return
+    value = getattr(result, name)
+    if name == "data":
+        lines.extend(["", "### data", str(value)])
+    else:
+        lines.append(f"{name}: {value}")
 
 
 def _report(progress: ProgressReporter | None, message: str, *args: object) -> None:

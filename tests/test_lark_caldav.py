@@ -25,9 +25,21 @@ class FakeVobject:
     def components(self):
         return [FakeComponent()]
 
+    def serialize(self):
+        return (
+            "BEGIN:VCALENDAR\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:lark-1\r\n"
+            "SUMMARY:Planning\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+
 
 class FakeResult:
     etag = "etag-1"
+    url = "https://caldav.example.com/calendars/alice/work/lark-1.ics"
+    data = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:lark-1\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
     vobject_instance = FakeVobject()
 
 
@@ -75,3 +87,60 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
     ]
     assert "secret" not in "\n".join(messages)
+
+
+def test_list_lark_events_dumps_raw_response(monkeypatch, tmp_path):
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+    start = datetime(2026, 6, 17, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 6, 17, 11, 0, tzinfo=UTC)
+    dump_path = tmp_path / "lark-response.txt"
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", FakeClient)
+
+    list_lark_events(config, start, end, dump_response_path=dump_path)
+
+    dump = dump_path.read_text(encoding="utf-8")
+    assert "host: https://caldav.example.com" in dump
+    assert "username: alice" in dump
+    assert "password:" not in dump
+    assert "calendar_url: https://caldav.example.com/calendars/alice/work" in dump
+    assert "raw_result_count: 1" in dump
+    assert "url: https://caldav.example.com/calendars/alice/work/lark-1.ics" in dump
+    assert "etag: etag-1" in dump
+    assert "BEGIN:VCALENDAR" in dump
+    assert "SUMMARY:Planning" in dump
+
+
+def test_list_lark_events_dumps_zero_result_response(monkeypatch, tmp_path):
+    class EmptyCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def search(self, *, start, end, event, expand):
+            return []
+
+    class EmptyClient(FakeClient):
+        def calendar(self, *, url):
+            return EmptyCalendar()
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+    start = datetime(2026, 6, 17, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 6, 17, 11, 0, tzinfo=UTC)
+    dump_path = tmp_path / "lark-response.txt"
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", EmptyClient)
+
+    list_lark_events(config, start, end, dump_response_path=dump_path)
+
+    dump = dump_path.read_text(encoding="utf-8")
+    assert "raw_result_count: 0" in dump
+    assert "No CalDAV object resources were returned by calendar.search()." in dump
