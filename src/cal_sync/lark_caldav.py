@@ -19,16 +19,25 @@ ProgressReporter = Callable[[str], None]
 AttemptResult = tuple[str, dict[str, object], list[Any]]
 
 
+class LarkCaldavAuthenticationError(RuntimeError):
+    pass
+
+
 def list_lark_calendars(config: CaldavConfig) -> list[tuple[str, str]]:
-    with DAVClient(
-        url=config.host,
-        username=config.username,
-        password=config.password,
-        timeout=config.timeout_seconds,
-    ) as client:
-        principal = client.principal()
-        calendars = principal.get_calendars()
-        return [(calendar.get_display_name(), str(calendar.url)) for calendar in calendars]
+    try:
+        with DAVClient(
+            url=config.host,
+            username=config.username,
+            password=config.password,
+            timeout=config.timeout_seconds,
+        ) as client:
+            principal = client.principal()
+            calendars = principal.get_calendars()
+            return [(calendar.get_display_name(), str(calendar.url)) for calendar in calendars]
+    except caldav_error.AuthorizationError as exc:
+        raise LarkCaldavAuthenticationError(
+            "Lark CalDAV authorization failed. Check host, username, and password."
+        ) from exc
 
 
 def list_lark_events(
@@ -148,7 +157,12 @@ def _get_calendar(config: CaldavConfig) -> Any:
     )
     if config.calendar_url:
         return client.calendar(url=config.calendar_url)
-    calendars = client.principal().get_calendars()
+    try:
+        calendars = client.principal().get_calendars()
+    except caldav_error.AuthorizationError as exc:
+        raise LarkCaldavAuthenticationError(
+            "Lark CalDAV authorization failed. Check host, username, and password."
+        ) from exc
     if not calendars:
         raise RuntimeError("No Lark CalDAV calendars found")
     return calendars[0]
@@ -330,6 +344,10 @@ def _load_lark_objects_by_sync_token(
     }
     try:
         collection = calendar.get_objects_by_sync_token(**parameters)
+    except caldav_error.AuthorizationError as exc:
+        raise LarkCaldavAuthenticationError(
+            "Lark CalDAV authorization failed. Check host, username, and password."
+        ) from exc
     except (caldav_error.ReportError, caldav_error.DAVError, AttributeError) as exc:
         LOGGER.info("Lark CalDAV sync-token object loading failed: %s", exc)
         return ("sync-token object loading", parameters, [], None)

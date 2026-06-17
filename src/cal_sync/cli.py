@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from cal_sync.config import AppConfig
-from cal_sync.lark_caldav import list_lark_calendars
+from cal_sync.lark_caldav import LarkCaldavAuthenticationError, list_lark_calendars
 from cal_sync.runtime import sync_once
 from cal_sync.tui import run_init_wizard
 
@@ -28,7 +28,11 @@ def lark_calendars(
     app_config = AppConfig.load(config)
     typer.echo(f"Lark CalDAV host: {app_config.caldav.host}")
     typer.echo(f"Lark CalDAV username: {app_config.caldav.username}")
-    calendars = list_lark_calendars(app_config.caldav)
+    try:
+        calendars = list_lark_calendars(app_config.caldav)
+    except LarkCaldavAuthenticationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
     if not calendars:
         typer.echo("No Lark calendars returned by CalDAV principal.")
         return
@@ -44,7 +48,11 @@ def init(
         typer.Option("--config", "-c", help="Path to local config file."),
     ] = None,
 ) -> None:
-    written = run_init_wizard(config)
+    try:
+        written = run_init_wizard(config)
+    except LarkCaldavAuthenticationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"Config saved to {config or written.default_path()}")
 
 
@@ -75,12 +83,16 @@ def sync(
         app_config.sync.dry_run = dry_run
 
     typer.echo(f"Writing sync log to {app_config.log_path}")
-    plan = sync_once(
-        app_config,
-        progress=typer.echo,
-        verbose=verbose,
-        dump_lark_response_path=dump_lark_response,
-    )
+    try:
+        plan = sync_once(
+            app_config,
+            progress=typer.echo,
+            verbose=verbose,
+            dump_lark_response_path=dump_lark_response,
+        )
+    except LarkCaldavAuthenticationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
     typer.echo(
         f"create={len(plan.to_create)} update={len(plan.to_update)} "
         f"delete={len(plan.to_delete)} dry_run={app_config.sync.dry_run}"
