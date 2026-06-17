@@ -15,14 +15,25 @@ LOGGER = logging.getLogger(__name__)
 ProgressReporter = Callable[[str], None]
 
 
-def sync_once(config: AppConfig, progress: ProgressReporter | None = None) -> SyncPlan:
+def sync_once(
+    config: AppConfig,
+    progress: ProgressReporter | None = None,
+    *,
+    verbose: bool = False,
+) -> SyncPlan:
     configure_logging(config.log_path)
     start, end = sync_window(config.sync.past_days, config.sync.future_days)
     LOGGER.info("Sync started: start=%s end=%s", start.isoformat(), end.isoformat())
     _report(progress, "Sync window: %s -> %s", start.isoformat(), end.isoformat())
 
     _report(progress, "Loading Lark CalDAV events...")
-    lark_events = list_lark_events(config.caldav, start, end)
+    lark_events = list_lark_events(
+        config.caldav,
+        start,
+        end,
+        progress=progress,
+        verbose=verbose,
+    )
     LOGGER.info("Loaded Lark events: count=%s", len(lark_events))
     _report(progress, "Loaded %s Lark events.", len(lark_events))
 

@@ -38,13 +38,17 @@ def sync(
         bool | None,
         typer.Option("--dry-run/--apply", help="Override config dry-run flag."),
     ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Print detailed diagnostics while syncing."),
+    ] = False,
 ) -> None:
     app_config = AppConfig.load(config)
     if dry_run is not None:
         app_config.sync.dry_run = dry_run
 
     typer.echo(f"Writing sync log to {app_config.log_path}")
-    plan = sync_once(app_config, progress=typer.echo)
+    plan = sync_once(app_config, progress=typer.echo, verbose=verbose)
     typer.echo(
         f"create={len(plan.to_create)} update={len(plan.to_update)} "
         f"delete={len(plan.to_delete)} dry_run={app_config.sync.dry_run}"
