@@ -10,5 +10,5 @@ def configure_logging(log_path: Path) -> None:
         filename=log_path,
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        force=True,
     )
-

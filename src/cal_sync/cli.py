@@ -43,9 +43,9 @@ def sync(
     if dry_run is not None:
         app_config.sync.dry_run = dry_run
 
-    plan = sync_once(app_config)
+    typer.echo(f"Writing sync log to {app_config.log_path}")
+    plan = sync_once(app_config, progress=typer.echo)
     typer.echo(
         f"create={len(plan.to_create)} update={len(plan.to_update)} "
         f"delete={len(plan.to_delete)} dry_run={app_config.sync.dry_run}"
     )
-
