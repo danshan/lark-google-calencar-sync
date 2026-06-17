@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from caldav import DAVClient
+from caldav.lib import error as caldav_error
 from dateutil.parser import isoparse
 
 from cal_sync.config import CaldavConfig
@@ -54,8 +55,14 @@ def list_lark_events(
     )
 
     calendar = _get_calendar(config)
-    attempt_results = _search_lark_calendar(calendar, attempts)
-    results = attempt_results[-1][2] if attempt_results else []
+    sync_attempt_result = _load_lark_objects_by_sync_token(calendar)
+    attempt_results = [sync_attempt_result]
+    if sync_attempt_result[2]:
+        results = sync_attempt_result[2]
+    else:
+        search_attempt_results = _search_lark_calendar(calendar, attempts)
+        attempt_results.extend(search_attempt_results)
+        results = search_attempt_results[-1][2] if search_attempt_results else []
     if dump_response_path is not None:
         _dump_lark_response(
             dump_response_path,
@@ -82,7 +89,12 @@ def list_lark_events(
     if verbose:
         _report(progress, "Lark CalDAV selected raw results: %s", len(results))
 
-    events = [_caldav_result_to_event(result) for result in results]
+    events = [
+        event
+        for result in results
+        if (event := _caldav_result_to_event(result)) is not None
+        and _event_overlaps_window(event, start, end)
+    ]
     if verbose and not events:
         _report(progress, "No Lark events returned by CalDAV search.")
     for event in events:
@@ -115,9 +127,14 @@ def _get_calendar(config: CaldavConfig) -> Any:
     return calendars[0]
 
 
-def _caldav_result_to_event(result: Any) -> CalendarEvent:
+def _caldav_result_to_event(result: Any) -> CalendarEvent | None:
     vobject_instance = result.vobject_instance
-    component = next(item for item in vobject_instance.components() if item.name == "VEVENT")
+    component = next(
+        (item for item in vobject_instance.components() if item.name == "VEVENT"),
+        None,
+    )
+    if component is None:
+        return None
     uid = str(component.uid.value)
     return CalendarEvent(
         source_id=uid,
@@ -146,6 +163,24 @@ def _as_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
     return isoparse(str(value))
+
+
+def _event_overlaps_window(event: CalendarEvent, start: datetime, end: datetime) -> bool:
+    return event.end > start and event.start < end
+
+
+def _load_lark_objects_by_sync_token(calendar: Any) -> tuple[str, dict[str, object], list[Any]]:
+    parameters = {
+        "sync_token": None,
+        "load_objects": True,
+        "disable_fallback": True,
+    }
+    try:
+        collection = calendar.get_objects_by_sync_token(**parameters)
+    except (caldav_error.ReportError, caldav_error.DAVError, AttributeError) as exc:
+        LOGGER.info("Lark CalDAV sync-token object loading failed: %s", exc)
+        return ("sync-token object loading", parameters, [])
+    return ("sync-token object loading", parameters, list(collection))
 
 
 def _search_attempts(start: datetime, end: datetime) -> list[SearchAttempt]:

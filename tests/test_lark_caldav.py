@@ -46,6 +46,15 @@ class FakeResult:
 class FakeCalendar:
     url = "https://caldav.example.com/calendars/alice/work"
 
+    def get_objects_by_sync_token(
+        self,
+        *,
+        sync_token=None,
+        load_objects=False,
+        disable_fallback=False,
+    ):
+        return []
+
     def search(self, *, start, end, event=None, expand=None):
         return [FakeResult()]
 
@@ -82,8 +91,10 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "Lark CalDAV calendar URL: https://caldav.example.com/calendars/alice/work",
         "Lark CalDAV search window: start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00",
-        "Lark CalDAV attempt 1: date range events with recurrence expansion",
-        "Lark CalDAV attempt 1 raw results: 1",
+        "Lark CalDAV attempt 1: sync-token object loading",
+        "Lark CalDAV attempt 1 raw results: 0",
+        "Lark CalDAV attempt 2: date range events with recurrence expansion",
+        "Lark CalDAV attempt 2 raw results: 1",
         "Lark CalDAV selected raw results: 1",
         "Lark event: source_id=lark-1 start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
@@ -197,10 +208,121 @@ def test_list_lark_events_retries_with_more_permissive_search(monkeypatch, tmp_p
         {"start": start, "end": end, "event": True, "expand": False},
     ]
     assert "Lark CalDAV attempt 1 raw results: 0" in messages
-    assert "Lark CalDAV attempt 2 raw results: 1" in messages
+    assert "Lark CalDAV attempt 2 raw results: 0" in messages
+    assert "Lark CalDAV attempt 3 raw results: 1" in messages
     dump = dump_path.read_text(encoding="utf-8")
     assert "attempt: 1" in dump
+    assert "sync_token: None" in dump
+    assert "attempt: 2" in dump
     assert "event: True" in dump
     assert "expand: True" in dump
-    assert "attempt: 2" in dump
+    assert "attempt: 3" in dump
     assert "expand: False" in dump
+
+
+def test_list_lark_events_prefers_sync_token_object_loading(monkeypatch):
+    class SyncCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def __init__(self):
+            self.search_called = False
+            self.sync_kwargs = None
+
+        def get_objects_by_sync_token(
+            self,
+            *,
+            sync_token=None,
+            load_objects=False,
+            disable_fallback=False,
+        ):
+            self.sync_kwargs = {
+                "sync_token": sync_token,
+                "load_objects": load_objects,
+                "disable_fallback": disable_fallback,
+            }
+            return [FakeResult()]
+
+        def search(self, **kwargs):
+            self.search_called = True
+            return []
+
+    calendar = SyncCalendar()
+
+    class SyncClient(FakeClient):
+        def calendar(self, *, url):
+            return calendar
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", SyncClient)
+
+    events = list_lark_events(
+        config,
+        datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+    )
+
+    assert [event.source_id for event in events] == ["lark-1"]
+    assert calendar.sync_kwargs == {
+        "sync_token": None,
+        "load_objects": True,
+        "disable_fallback": True,
+    }
+    assert calendar.search_called is False
+
+
+def test_list_lark_events_filters_sync_loaded_objects_locally(monkeypatch):
+    class OutsideComponent(FakeComponent):
+        def __init__(self):
+            super().__init__()
+            self.uid = FakeText("outside-window")
+            self.dtstart = FakeText(datetime(2026, 6, 18, 10, 0, tzinfo=UTC))
+            self.dtend = FakeText(datetime(2026, 6, 18, 11, 0, tzinfo=UTC))
+
+    class OutsideVobject:
+        def components(self):
+            return [OutsideComponent()]
+
+    class OutsideResult(FakeResult):
+        vobject_instance = OutsideVobject()
+
+    class SyncCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def get_objects_by_sync_token(
+            self,
+            *,
+            sync_token=None,
+            load_objects=False,
+            disable_fallback=False,
+        ):
+            return [FakeResult(), OutsideResult()]
+
+        def search(self, **kwargs):
+            raise AssertionError("search should not be called when sync-token returns objects")
+
+    class SyncClient(FakeClient):
+        def calendar(self, *, url):
+            return SyncCalendar()
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", SyncClient)
+
+    events = list_lark_events(
+        config,
+        datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+    )
+
+    assert [event.source_id for event in events] == ["lark-1"]
