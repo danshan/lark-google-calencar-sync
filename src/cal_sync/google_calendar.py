@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -64,8 +66,34 @@ def _run_manual_authorization(flow: InstalledAppFlow) -> Credentials:
         raise GoogleAuthorizationError(
             "Google authorization requires the full redirected URL."
         )
-    flow.fetch_token(authorization_response=authorization_response)
+    _validate_manual_authorization_response(authorization_response)
+    try:
+        _fetch_manual_token(flow, authorization_response)
+    except Exception as exc:
+        raise GoogleAuthorizationError(
+            "Google authorization failed. Paste the full final localhost URL from the browser."
+        ) from exc
     return flow.credentials
+
+
+def _validate_manual_authorization_response(authorization_response: str) -> None:
+    parsed = urlparse(authorization_response)
+    if parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1"}:
+        raise GoogleAuthorizationError(
+            "Google authorization requires the full redirected localhost URL."
+        )
+
+
+def _fetch_manual_token(flow: InstalledAppFlow, authorization_response: str) -> None:
+    previous = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
+    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+    try:
+        flow.fetch_token(authorization_response=authorization_response)
+    finally:
+        if previous is None:
+            os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
+        else:
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = previous
 
 
 def event_to_google_body(event: CalendarEvent) -> dict[str, Any]:

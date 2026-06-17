@@ -68,7 +68,9 @@ path to that downloaded JSON file.
 On a system without a runnable browser, choose to authorize when prompted. The
 tool prints a Google authorization URL. Open that URL in a browser on another
 machine, finish Google authorization, then copy the full final URL that starts
-with `http://localhost` back into the terminal prompt.
+with `http://localhost` back into the terminal prompt. The localhost page may
+fail to load on that browser machine, which is expected; copy the URL from the
+address bar.
 
 ## Usage
 

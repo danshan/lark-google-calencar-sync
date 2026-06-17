@@ -1,7 +1,9 @@
+import os
 from datetime import UTC, datetime
 
 from cal_sync.google_calendar import (
     GOOGLE_SOURCE_KEY,
+    GoogleAuthorizationError,
     event_to_google_body,
     google_item_to_event,
     load_credentials,
@@ -71,6 +73,7 @@ def test_load_credentials_falls_back_to_manual_oauth_when_browser_is_missing(
 
         def fetch_token(self, **kwargs):
             self.authorization_response = kwargs["authorization_response"]
+            self.insecure_transport = os.environ.get("OAUTHLIB_INSECURE_TRANSPORT")
 
     flow = FakeFlow()
 
@@ -89,7 +92,39 @@ def test_load_credentials_falls_back_to_manual_oauth_when_browser_is_missing(
     assert credentials is flow.credentials
     assert flow.redirect_uri == "http://localhost"
     assert flow.authorization_response == "http://localhost/?state=state&code=auth-code&scope=calendar"
+    assert flow.insecure_transport == "1"
+    assert "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ
     assert token_path.read_text(encoding="utf-8") == '{"token": "fake"}'
     output = capsys.readouterr().out
     assert "No runnable browser was found" in output
     assert "https://accounts.example.com/auth" in output
+
+
+def test_load_credentials_rejects_manual_oauth_response_from_non_localhost(
+    monkeypatch,
+    tmp_path,
+):
+    import webbrowser
+
+    class FakeFlow:
+        def run_local_server(self, *, port):
+            raise webbrowser.Error("could not locate runnable browser")
+
+        def authorization_url(self, **kwargs):
+            return "https://accounts.example.com/auth", "state"
+
+    monkeypatch.setattr(
+        "cal_sync.google_calendar.InstalledAppFlow.from_client_secrets_file",
+        lambda path, scopes: FakeFlow(),
+    )
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: "http://example.com/?state=state&code=auth-code",
+    )
+
+    try:
+        load_credentials(tmp_path / "google.credentials.json", tmp_path / "google.token.json")
+    except GoogleAuthorizationError as exc:
+        assert "localhost" in str(exc)
+    else:
+        raise AssertionError("Expected GoogleAuthorizationError")
