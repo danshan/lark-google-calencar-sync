@@ -92,9 +92,12 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "Lark CalDAV calendar URL: https://caldav.example.com/calendars/alice/work",
         "Lark CalDAV search window: start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00",
-        "Starting Lark CalDAV attempt 1: date range events with recurrence expansion",
-        "Lark CalDAV attempt 1: date range events with recurrence expansion",
-        "Lark CalDAV attempt 1 raw results: 1",
+        "Starting Lark CalDAV attempt 1: PROPFIND object listing",
+        "Starting Lark CalDAV attempt 2: date range events with recurrence expansion",
+        "Lark CalDAV attempt 1: PROPFIND object listing",
+        "Lark CalDAV attempt 1 raw results: 0",
+        "Lark CalDAV attempt 2: date range events with recurrence expansion",
+        "Lark CalDAV attempt 2 raw results: 1",
         "Lark CalDAV selected raw results: 1",
         "Lark event: source_id=lark-1 start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
@@ -208,13 +211,84 @@ def test_list_lark_events_retries_with_more_permissive_search(monkeypatch, tmp_p
         {"start": start, "end": end, "event": True, "expand": False},
     ]
     assert "Lark CalDAV attempt 1 raw results: 0" in messages
-    assert "Lark CalDAV attempt 2 raw results: 1" in messages
+    assert "Lark CalDAV attempt 2 raw results: 0" in messages
+    assert "Lark CalDAV attempt 3 raw results: 1" in messages
     dump = dump_path.read_text(encoding="utf-8")
     assert "attempt: 1" in dump
     assert "event: True" in dump
     assert "expand: True" in dump
     assert "attempt: 2" in dump
     assert "expand: False" in dump
+
+
+class FakeUrl:
+    def __init__(self, value):
+        self.value = value.rstrip("/")
+
+    def join(self, href):
+        if str(href).startswith("http"):
+            return FakeUrl(str(href))
+        return FakeUrl(f"{self.value}/{str(href).lstrip('/')}")
+
+    def canonical(self):
+        return self.value
+
+    def __str__(self):
+        return self.value
+
+
+class FakePropfindResponse:
+    def __init__(self, hrefs):
+        self.hrefs = hrefs
+
+    def expand_simple_props(self, props):
+        return {href: {} for href in self.hrefs}
+
+
+def test_list_lark_events_loads_objects_by_propfind_before_search(monkeypatch):
+    class PropfindCalendar:
+        url = FakeUrl("https://caldav.example.com/calendars/alice/work")
+
+        def __init__(self):
+            self.search_called = False
+            self.query_properties_args = None
+
+        def _query_properties(self, props, depth):
+            self.query_properties_args = {"props": props, "depth": depth}
+            return FakePropfindResponse(["lark-1.ics"])
+
+        def event_by_url(self, href):
+            assert href == "lark-1.ics"
+            return FakeResult()
+
+        def search(self, **kwargs):
+            self.search_called = True
+            return []
+
+    calendar = PropfindCalendar()
+
+    class PropfindClient(FakeClient):
+        def calendar(self, *, url):
+            return calendar
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", PropfindClient)
+
+    events = list_lark_events(
+        config,
+        datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+    )
+
+    assert [event.source_id for event in events] == ["lark-1"]
+    assert calendar.query_properties_args["depth"] == 1
+    assert calendar.search_called is False
 
 
 def test_list_lark_events_prefers_sync_token_object_loading(monkeypatch):
