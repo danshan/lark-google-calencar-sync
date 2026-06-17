@@ -9,12 +9,22 @@ import tomli_w
 from pydantic import BaseModel, Field
 
 
+def default_config_dir() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME")
+    return Path(base).expanduser() if base else Path.home() / ".config"
+
+
+def default_app_config_dir() -> Path:
+    return default_config_dir() / "lark-google-calendar-sync"
+
+
 class CaldavConfig(BaseModel):
     host: str = ""
     username: str = ""
     password: str = ""
     calendar_url: str = ""
     timeout_seconds: int = Field(default=30, ge=1)
+    state_path: Path | None = None
 
 
 class GoogleConfig(BaseModel):
@@ -37,9 +47,7 @@ class AppConfig(BaseModel):
 
     @classmethod
     def default_path(cls) -> Path:
-        base = os.environ.get("XDG_CONFIG_HOME")
-        config_home = Path(base).expanduser() if base else Path.home() / ".config"
-        return config_home / "lark-google-calendar-sync" / "config.toml"
+        return default_app_config_dir() / "config.toml"
 
     @classmethod
     def load(cls, path: Path | None = None) -> Self:
@@ -51,4 +59,5 @@ class AppConfig(BaseModel):
     def save(self, path: Path | None = None) -> None:
         config_path = path or self.default_path()
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(tomli_w.dumps(self.model_dump(mode="json")), encoding="utf-8")
+        config_data = self.model_dump(mode="json", exclude_none=True)
+        config_path.write_text(tomli_w.dumps(config_data), encoding="utf-8")

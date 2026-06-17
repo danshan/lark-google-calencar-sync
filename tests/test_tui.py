@@ -12,6 +12,7 @@ def test_init_wizard_prefills_existing_config(monkeypatch, tmp_path):
             username="alice",
             password="secret",
             calendar_url="https://caldav.example.com/calendars/alice/work",
+            state_path=Path("/tmp/lark-state.json"),
         ),
         google=GoogleConfig(
             calendar_id="work-calendar",
@@ -52,6 +53,7 @@ def test_init_wizard_prefills_existing_config(monkeypatch, tmp_path):
     assert prompt_defaults["Lark CalDAV host"] == "https://caldav.example.com"
     assert prompt_defaults["Lark CalDAV username"] == "alice"
     assert prompt_defaults["Lark CalDAV password"] == "secret"
+    assert prompt_defaults["Lark sync state path"] == "/tmp/lark-state.json"
     assert prompt_defaults["Google Calendar ID"] == "work-calendar"
     assert prompt_defaults["Google OAuth client JSON path"] == "/secrets/google.credentials.json"
     assert int_defaults["Sync past days"] == 14

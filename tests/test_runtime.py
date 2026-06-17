@@ -29,17 +29,18 @@ def test_sync_once_reports_progress_and_writes_log(monkeypatch, tmp_path):
         "cal_sync.runtime.sync_window",
         lambda past, future: (event.start, event.end),
     )
-    monkeypatch.setattr(
-        "cal_sync.runtime.list_lark_events",
-        lambda caldav,
+    def list_lark_events(
+        caldav,
         start,
         end,
         *,
         progress=None,
         verbose=False,
         dump_response_path=None,
-        use_sync_token=False: [event],
-    )
+    ):
+        return [event]
+
+    monkeypatch.setattr("cal_sync.runtime.list_lark_events", list_lark_events)
     monkeypatch.setattr("cal_sync.runtime.build_google_service", lambda google: object())
     monkeypatch.setattr(
         "cal_sync.runtime.list_google_events",
@@ -87,11 +88,9 @@ def test_sync_once_passes_verbose_to_lark_loader(monkeypatch, tmp_path):
         progress=None,
         verbose=False,
         dump_response_path=None,
-        use_sync_token=False,
     ):
         seen["verbose"] = verbose
         seen["dump_response_path"] = dump_response_path
-        seen["use_sync_token"] = use_sync_token
         return []
 
     monkeypatch.setattr(
@@ -118,95 +117,4 @@ def test_sync_once_passes_verbose_to_lark_loader(monkeypatch, tmp_path):
     assert seen == {
         "verbose": True,
         "dump_response_path": dump_path,
-        "use_sync_token": True,
     }
-
-
-def test_sync_once_can_enable_lark_sync_token(monkeypatch, tmp_path):
-    config = AppConfig(
-        caldav=CaldavConfig(host="https://caldav.example.com", username="alice", password="secret"),
-        google=GoogleConfig(
-            calendar_id="primary",
-            credentials_path=Path("google.credentials.json"),
-            token_path=Path("google.token.json"),
-        ),
-        sync=SyncConfig(dry_run=True),
-        log_path=tmp_path / "sync.log",
-    )
-    seen: dict[str, object] = {}
-
-    def list_lark_events(
-        caldav,
-        start,
-        end,
-        *,
-        progress=None,
-        verbose=False,
-        dump_response_path=None,
-        use_sync_token=False,
-    ):
-        seen["use_sync_token"] = use_sync_token
-        return []
-
-    monkeypatch.setattr(
-        "cal_sync.runtime.sync_window",
-        lambda past, future: (
-            datetime(2026, 6, 17, 10, 0, tzinfo=UTC),
-            datetime(2026, 6, 17, 11, 0, tzinfo=UTC),
-        ),
-    )
-    monkeypatch.setattr("cal_sync.runtime.list_lark_events", list_lark_events)
-    monkeypatch.setattr("cal_sync.runtime.build_google_service", lambda google: object())
-    monkeypatch.setattr(
-        "cal_sync.runtime.list_google_events",
-        lambda service, calendar_id, start, end: [],
-    )
-
-    sync_once(config, progress=lambda message: None, use_lark_sync_token=True)
-
-    assert seen == {"use_sync_token": True}
-
-
-def test_sync_once_can_skip_lark_sync_token(monkeypatch, tmp_path):
-    config = AppConfig(
-        caldav=CaldavConfig(host="https://caldav.example.com", username="alice", password="secret"),
-        google=GoogleConfig(
-            calendar_id="primary",
-            credentials_path=Path("google.credentials.json"),
-            token_path=Path("google.token.json"),
-        ),
-        sync=SyncConfig(dry_run=True),
-        log_path=tmp_path / "sync.log",
-    )
-    seen: dict[str, object] = {}
-
-    def list_lark_events(
-        caldav,
-        start,
-        end,
-        *,
-        progress=None,
-        verbose=False,
-        dump_response_path=None,
-        use_sync_token=True,
-    ):
-        seen["use_sync_token"] = use_sync_token
-        return []
-
-    monkeypatch.setattr(
-        "cal_sync.runtime.sync_window",
-        lambda past, future: (
-            datetime(2026, 6, 17, 10, 0, tzinfo=UTC),
-            datetime(2026, 6, 17, 11, 0, tzinfo=UTC),
-        ),
-    )
-    monkeypatch.setattr("cal_sync.runtime.list_lark_events", list_lark_events)
-    monkeypatch.setattr("cal_sync.runtime.build_google_service", lambda google: object())
-    monkeypatch.setattr(
-        "cal_sync.runtime.list_google_events",
-        lambda service, calendar_id, start, end: [],
-    )
-
-    sync_once(config, progress=lambda message: None, use_lark_sync_token=False)
-
-    assert seen == {"use_sync_token": False}

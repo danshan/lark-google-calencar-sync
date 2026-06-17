@@ -17,6 +17,7 @@ def test_config_round_trip_persists_expected_sections(tmp_path):
             username="alice",
             password="secret",
             calendar_url="https://caldav.example.com/calendars/alice/work",
+            state_path=Path("lark-state.json"),
         ),
         google=GoogleConfig(
             calendar_id="primary",
@@ -34,6 +35,7 @@ def test_config_round_trip_persists_expected_sections(tmp_path):
     assert loaded.caldav.username == "alice"
     assert loaded.caldav.password == "secret"
     assert loaded.caldav.calendar_url == "https://caldav.example.com/calendars/alice/work"
+    assert loaded.caldav.state_path == Path("lark-state.json")
     assert loaded.google.calendar_id == "primary"
     assert loaded.sync.past_days == 14
     assert loaded.sync.future_days == 45

@@ -14,6 +14,7 @@ def run_init_wizard(config_path: Path | None = None) -> AppConfig:
     existing = AppConfig.load(target_path) if target_path.exists() else AppConfig()
     print(f"Writing config to {target_path}")
 
+    state_default = existing.caldav.state_path or target_path.parent / "lark-state.json"
     caldav = CaldavConfig(
         host=Prompt.ask("Lark CalDAV host", default=existing.caldav.host),
         username=Prompt.ask("Lark CalDAV username", default=existing.caldav.username),
@@ -22,6 +23,9 @@ def run_init_wizard(config_path: Path | None = None) -> AppConfig:
             default=existing.caldav.password,
             password=True,
         ),
+        state_path=Path(
+            Prompt.ask("Lark sync state path", default=str(state_default))
+        ).expanduser(),
     )
 
     calendars = list_lark_calendars(caldav)

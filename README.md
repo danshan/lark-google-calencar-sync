@@ -19,8 +19,8 @@ Runtime configuration is stored outside the repository by default:
 ${XDG_CONFIG_HOME:-~/.config}/lark-google-calendar-sync/config.toml
 ```
 
-The file contains CalDAV credentials, Google OAuth paths, sync date range, and
-log path. It must not be committed to Git.
+The file contains CalDAV credentials, the Lark sync state path, Google OAuth
+paths, sync date range, and log path. It must not be committed to Git.
 
 ## Usage
 
@@ -34,6 +34,7 @@ The wizard asks for:
 
 - Lark CalDAV host, username, and password.
 - The Lark calendar to read from.
+- Lark sync state path.
 - Google Calendar ID, usually `primary`.
 - Google OAuth client JSON path.
 - Sync date window, such as past 7 days and future 30 days.
@@ -58,3 +59,10 @@ The sync is one-way from Lark to Google. Google events created by this tool are
 marked with a private `larkSourceId` extended property. Sync deletes only those
 managed Google events when the matching Lark event disappears, and leaves
 personal or unrelated Google events untouched.
+
+Lark event loading uses CalDAV sync-token object loading. The first run for a
+new state file performs an initial collection sync. Later runs reuse the saved
+sync token and local event cache, so they only need CalDAV changes from Feishu
+and then filter the configured date window locally. The date-range CalDAV search
+path is intentionally not used because Feishu returns empty results for it in
+this environment.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -7,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from caldav import DAVClient
-from caldav.elements import dav
 from caldav.lib import error as caldav_error
 from dateutil.parser import isoparse
 
@@ -16,7 +16,7 @@ from cal_sync.models import CalendarEvent
 
 LOGGER = logging.getLogger(__name__)
 ProgressReporter = Callable[[str], None]
-SearchAttempt = tuple[str, dict[str, object]]
+AttemptResult = tuple[str, dict[str, object], list[Any]]
 
 
 def list_lark_calendars(config: CaldavConfig) -> list[tuple[str, str]]:
@@ -39,9 +39,7 @@ def list_lark_events(
     progress: ProgressReporter | None = None,
     verbose: bool = False,
     dump_response_path: Path | None = None,
-    use_sync_token: bool = True,
 ) -> list[CalendarEvent]:
-    attempts = _search_attempts(start, end)
     if verbose:
         _report(progress, "Lark CalDAV host: %s", config.host)
         _report(progress, "Lark CalDAV username: %s", config.username)
@@ -62,40 +60,19 @@ def list_lark_events(
     )
 
     calendar = _get_calendar(config)
-    attempt_results = []
-    start_index = 1
-    if use_sync_token:
-        if verbose:
-            _report(progress, "Starting Lark CalDAV attempt 1: sync-token object loading")
-        sync_attempt_result = _load_lark_objects_by_sync_token(calendar)
-        attempt_results.append(sync_attempt_result)
-        start_index = 2
-
-    if attempt_results and attempt_results[-1][2]:
-        results = attempt_results[-1][2]
-    else:
-        if verbose:
-            _report(
-                progress,
-                "Starting Lark CalDAV attempt %s: PROPFIND object listing",
-                start_index,
-            )
-        propfind_attempt_result = _load_lark_objects_by_propfind(calendar)
-        attempt_results.append(propfind_attempt_result)
-        start_index += 1
-
-        if propfind_attempt_result[2]:
-            results = propfind_attempt_result[2]
-        else:
-            search_attempt_results = _search_lark_calendar(
-                calendar,
-                attempts,
-                progress=progress,
-                verbose=verbose,
-                start_index=start_index,
-            )
-            attempt_results.extend(search_attempt_results)
-            results = search_attempt_results[-1][2] if search_attempt_results else []
+    state = _load_lark_state(config.state_path)
+    if verbose:
+        _report(progress, "Starting Lark CalDAV attempt 1: sync-token object loading")
+        _report(
+            progress,
+            "Lark CalDAV sync token: %s",
+            "<empty>" if state.sync_token is None else "<cached>",
+        )
+    label, parameters, results, next_sync_token = _load_lark_objects_by_sync_token(
+        calendar,
+        state.sync_token,
+    )
+    attempt_results: list[AttemptResult] = [(label, parameters, results)]
     if dump_response_path is not None:
         _dump_lark_response(
             dump_response_path,
@@ -122,15 +99,25 @@ def list_lark_events(
     if verbose:
         _report(progress, "Lark CalDAV selected raw results: %s", len(results))
 
-    events = _caldav_results_to_events(
+    _apply_lark_results_to_state(
         results,
+        state,
+        progress=progress,
+        verbose=verbose,
+    )
+    if next_sync_token is not None:
+        state.sync_token = next_sync_token
+    _save_lark_state(config.state_path, state)
+
+    events = _events_in_window(
+        state.events_by_url.values(),
         start,
         end,
         progress=progress,
         verbose=verbose,
     )
     if verbose and not events:
-        _report(progress, "No Lark events returned by CalDAV search.")
+        _report(progress, "No Lark events in sync window.")
     for event in events:
         LOGGER.info(
             "Lark event: source_id=%s start=%s end=%s summary=%s",
@@ -167,42 +154,116 @@ def _get_calendar(config: CaldavConfig) -> Any:
     return calendars[0]
 
 
-def _caldav_results_to_events(
+class LarkState:
+    def __init__(
+        self,
+        *,
+        sync_token: str | None = None,
+        events_by_url: dict[str, CalendarEvent] | None = None,
+    ) -> None:
+        self.sync_token = sync_token
+        self.events_by_url = events_by_url or {}
+
+
+def _load_lark_state(path: Path | None) -> LarkState:
+    if path is None:
+        return LarkState()
+    if not path.exists():
+        return LarkState()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.info(
+            "Lark state load failed, starting from empty state: path=%s error=%s",
+            path,
+            exc,
+        )
+        return LarkState()
+    raw_events = data.get("events_by_url", {})
+    events_by_url = {}
+    if isinstance(raw_events, dict):
+        for url, event_data in raw_events.items():
+            try:
+                events_by_url[str(url)] = CalendarEvent.model_validate(event_data)
+            except Exception as exc:
+                LOGGER.info("Skipped invalid cached Lark event: url=%s error=%s", url, exc)
+    sync_token = data.get("sync_token")
+    return LarkState(
+        sync_token=str(sync_token) if sync_token else None,
+        events_by_url=events_by_url,
+    )
+
+
+def _save_lark_state(path: Path | None, state: LarkState) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "sync_token": state.sync_token,
+        "events_by_url": {
+            url: event.model_dump(mode="json")
+            for url, event in sorted(state.events_by_url.items())
+        },
+    }
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _apply_lark_results_to_state(
     results: list[Any],
+    state: LarkState,
+    *,
+    progress: ProgressReporter | None,
+    verbose: bool,
+) -> None:
+    for result in results:
+        url = _result_url(result)
+        event, skip_reason = _caldav_result_to_event(result)
+        if event is None:
+            if (
+                url is not None
+                and url in state.events_by_url
+                and skip_reason == "missing vobject_instance"
+            ):
+                del state.events_by_url[url]
+                LOGGER.info("Removed cached Lark event: url=%s", url)
+                if verbose:
+                    _report(progress, "Removed cached Lark event: url=%s", url)
+            else:
+                _report_skipped_object(progress, verbose, result, skip_reason or "unparsed object")
+            continue
+        if url is None:
+            _report_skipped_object(progress, verbose, result, "missing object URL")
+            continue
+        state.events_by_url[url] = event
+
+
+def _events_in_window(
+    events: Any,
     start: datetime,
     end: datetime,
     *,
     progress: ProgressReporter | None,
     verbose: bool,
 ) -> list[CalendarEvent]:
-    events = []
+    window_events = []
     outside_window_count = 0
-    for result in results:
-        event, skip_reason = _caldav_result_to_event(result)
-        if event is None:
-            _report_skipped_object(progress, verbose, result, skip_reason or "unparsed object")
-            continue
+    for event in events:
         if not _event_overlaps_window(event, start, end):
             outside_window_count += 1
-            LOGGER.debug(
-                "Skipped Lark CalDAV object outside sync window: source_id=%s identity=%s",
-                event.source_id,
-                _result_identity(result),
-            )
             continue
-        events.append(event)
+        window_events.append(event)
     if outside_window_count:
         LOGGER.info(
-            "Skipped Lark CalDAV objects outside sync window: count=%s",
+            "Skipped cached Lark events outside sync window: count=%s",
             outside_window_count,
         )
         if verbose:
             _report(
                 progress,
-                "Skipped Lark CalDAV objects outside sync window: %s",
+                "Skipped cached Lark events outside sync window: %s",
                 outside_window_count,
             )
-    return events
+    return sorted(window_events, key=lambda event: (event.start, event.end, event.source_id))
 
 
 def _caldav_result_to_event(result: Any) -> tuple[CalendarEvent | None, str | None]:
@@ -258,9 +319,12 @@ def _event_overlaps_window(event: CalendarEvent, start: datetime, end: datetime)
     return event.end > start and event.start < end
 
 
-def _load_lark_objects_by_sync_token(calendar: Any) -> tuple[str, dict[str, object], list[Any]]:
+def _load_lark_objects_by_sync_token(
+    calendar: Any,
+    sync_token: str | None,
+) -> tuple[str, dict[str, object], list[Any], str | None]:
     parameters = {
-        "sync_token": None,
+        "sync_token": sync_token,
         "load_objects": True,
         "disable_fallback": True,
     }
@@ -268,68 +332,13 @@ def _load_lark_objects_by_sync_token(calendar: Any) -> tuple[str, dict[str, obje
         collection = calendar.get_objects_by_sync_token(**parameters)
     except (caldav_error.ReportError, caldav_error.DAVError, AttributeError) as exc:
         LOGGER.info("Lark CalDAV sync-token object loading failed: %s", exc)
-        return ("sync-token object loading", parameters, [])
-    return ("sync-token object loading", parameters, list(collection))
-
-
-def _load_lark_objects_by_propfind(calendar: Any) -> tuple[str, dict[str, object], list[Any]]:
-    parameters = {"depth": 1, "props": "getetag"}
-    try:
-        response = calendar._query_properties([dav.GetEtag()], depth=1)
-        href_props = response.expand_simple_props([dav.GetEtag()])
-        objects = []
-        for href in href_props:
-            if str(calendar.url.join(href).canonical()) == str(calendar.url.canonical()):
-                continue
-            try:
-                objects.append(calendar.event_by_url(href))
-            except (caldav_error.NotFoundError, caldav_error.DAVError, ValueError) as exc:
-                LOGGER.info("Lark CalDAV PROPFIND object load skipped: href=%s error=%s", href, exc)
-        return ("PROPFIND object listing", parameters, objects)
-    except (caldav_error.ReportError, caldav_error.DAVError, AttributeError) as exc:
-        LOGGER.info("Lark CalDAV PROPFIND object listing failed: %s", exc)
-        return ("PROPFIND object listing", parameters, [])
-
-
-def _search_attempts(start: datetime, end: datetime) -> list[SearchAttempt]:
-    return [
-        (
-            "date range events with recurrence expansion",
-            {"start": start, "end": end, "event": True, "expand": True},
-        ),
-        (
-            "date range events without recurrence expansion",
-            {"start": start, "end": end, "event": True, "expand": False},
-        ),
-        (
-            "date range without component or expansion filters",
-            {"start": start, "end": end},
-        ),
-    ]
-
-
-def _search_lark_calendar(
-    calendar: Any,
-    attempts: list[SearchAttempt],
-    *,
-    progress: ProgressReporter | None = None,
-    verbose: bool = False,
-    start_index: int = 1,
-) -> list[tuple[str, dict[str, object], list[Any]]]:
-    attempt_results: list[tuple[str, dict[str, object], list[Any]]] = []
-    for offset, (label, parameters) in enumerate(attempts):
-        attempt_index = start_index + offset
-        if verbose:
-            _report(progress, "Starting Lark CalDAV attempt %s: %s", attempt_index, label)
-        try:
-            results = calendar.search(**parameters)
-        except Exception as exc:
-            LOGGER.info("Lark CalDAV search attempt failed: label=%s error=%s", label, exc)
-            results = []
-        attempt_results.append((label, parameters, results))
-        if results:
-            break
-    return attempt_results
+        return ("sync-token object loading", parameters, [], None)
+    return (
+        "sync-token object loading",
+        parameters,
+        list(collection),
+        getattr(collection, "sync_token", None),
+    )
 
 
 def _dump_lark_response(
@@ -357,7 +366,7 @@ def _dump_lark_response(
     selected_results = attempt_results[-1][2] if attempt_results else []
     lines.append(f"raw_result_count: {len(selected_results)}")
     if not selected_results:
-        lines.append("No CalDAV object resources were returned by calendar.search().")
+        lines.append("No CalDAV object resources were returned by sync-token object loading.")
 
     for attempt_index, (label, parameters, results) in enumerate(attempt_results, start=1):
         lines.extend(
@@ -446,6 +455,11 @@ def _result_identity(result: Any) -> str:
         if value:
             return f"{name}={value}"
     return f"type={type(result).__module__}.{type(result).__qualname__}"
+
+
+def _result_url(result: Any) -> str | None:
+    value = _safe_attr_without_logging(result, "url")
+    return str(value) if value else None
 
 
 def _safe_attr_without_logging(result: Any, name: str) -> Any:

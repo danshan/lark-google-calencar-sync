@@ -66,16 +66,9 @@ def sync(
         Path | None,
         typer.Option(
             "--dump-lark-response",
-            help="Write raw Lark CalDAV search results to a local diagnostic file.",
+            help="Write raw Lark CalDAV sync-token results to a local diagnostic file.",
         ),
     ] = None,
-    skip_lark_sync_token: Annotated[
-        bool,
-        typer.Option(
-            "--skip-lark-sync-token",
-            help="Skip CalDAV sync-collection and start with PROPFIND object listing.",
-        ),
-    ] = False,
 ) -> None:
     app_config = AppConfig.load(config)
     if dry_run is not None:
@@ -87,7 +80,6 @@ def sync(
         progress=typer.echo,
         verbose=verbose,
         dump_lark_response_path=dump_lark_response,
-        use_lark_sync_token=not skip_lark_sync_token,
     )
     typer.echo(
         f"create={len(plan.to_create)} update={len(plan.to_update)} "
