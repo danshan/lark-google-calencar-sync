@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from cal_sync.config import AppConfig
+from cal_sync.lark_caldav import list_lark_calendars
 from cal_sync.runtime import sync_once
 from cal_sync.tui import run_init_wizard
 
@@ -15,6 +16,25 @@ app = typer.Typer(no_args_is_help=True)
 @app.command("config-path")
 def config_path() -> None:
     typer.echo(AppConfig.default_path())
+
+
+@app.command("lark-calendars")
+def lark_calendars(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to local config file."),
+    ] = None,
+) -> None:
+    app_config = AppConfig.load(config)
+    typer.echo(f"Lark CalDAV host: {app_config.caldav.host}")
+    typer.echo(f"Lark CalDAV username: {app_config.caldav.username}")
+    calendars = list_lark_calendars(app_config.caldav)
+    if not calendars:
+        typer.echo("No Lark calendars returned by CalDAV principal.")
+        return
+
+    for index, (name, url) in enumerate(calendars, start=1):
+        typer.echo(f"{index}. {name} - {url}")
 
 
 @app.command("init")
