@@ -12,7 +12,6 @@ dependencies = [
     "pydantic-settings>=2.9.1",
     "python-dateutil>=2.9.0.post0",
     "rich>=14.0.0",
-    "textual>=3.5.0",
     "tomli-w>=1.2.0",
     "typer>=0.16.0",
     "vobject>=0.9.9",
