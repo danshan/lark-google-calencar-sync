@@ -39,7 +39,7 @@ def list_lark_events(
     progress: ProgressReporter | None = None,
     verbose: bool = False,
     dump_response_path: Path | None = None,
-    use_sync_token: bool = False,
+    use_sync_token: bool = True,
 ) -> list[CalendarEvent]:
     attempts = _search_attempts(start, end)
     if verbose:

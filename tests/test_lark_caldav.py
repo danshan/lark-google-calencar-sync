@@ -92,12 +92,15 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "Lark CalDAV calendar URL: https://caldav.example.com/calendars/alice/work",
         "Lark CalDAV search window: start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00",
-        "Starting Lark CalDAV attempt 1: PROPFIND object listing",
-        "Starting Lark CalDAV attempt 2: date range events with recurrence expansion",
-        "Lark CalDAV attempt 1: PROPFIND object listing",
+        "Starting Lark CalDAV attempt 1: sync-token object loading",
+        "Starting Lark CalDAV attempt 2: PROPFIND object listing",
+        "Starting Lark CalDAV attempt 3: date range events with recurrence expansion",
+        "Lark CalDAV attempt 1: sync-token object loading",
         "Lark CalDAV attempt 1 raw results: 0",
-        "Lark CalDAV attempt 2: date range events with recurrence expansion",
-        "Lark CalDAV attempt 2 raw results: 1",
+        "Lark CalDAV attempt 2: PROPFIND object listing",
+        "Lark CalDAV attempt 2 raw results: 0",
+        "Lark CalDAV attempt 3: date range events with recurrence expansion",
+        "Lark CalDAV attempt 3 raw results: 1",
         "Lark CalDAV selected raw results: 1",
         "Lark event: source_id=lark-1 start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
@@ -203,6 +206,7 @@ def test_list_lark_events_retries_with_more_permissive_search(monkeypatch, tmp_p
         progress=messages.append,
         verbose=True,
         dump_response_path=dump_path,
+        use_sync_token=False,
     )
 
     assert [event.source_id for event in events] == ["lark-1"]
@@ -284,6 +288,7 @@ def test_list_lark_events_loads_objects_by_propfind_before_search(monkeypatch):
         config,
         datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
         datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+        use_sync_token=False,
     )
 
     assert [event.source_id for event in events] == ["lark-1"]

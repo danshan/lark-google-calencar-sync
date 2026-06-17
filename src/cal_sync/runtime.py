@@ -22,7 +22,7 @@ def sync_once(
     *,
     verbose: bool = False,
     dump_lark_response_path: Path | None = None,
-    use_lark_sync_token: bool = False,
+    use_lark_sync_token: bool = True,
 ) -> SyncPlan:
     configure_logging(config.log_path)
     start, end = sync_window(config.sync.past_days, config.sync.future_days)
