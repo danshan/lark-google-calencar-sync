@@ -147,6 +147,7 @@ def list_lark_events(
                 event.end.isoformat(),
                 event.summary,
             )
+            _report_event_detail(progress, event)
     return events
 
 
@@ -360,6 +361,19 @@ def _append_attr(lines: list[str], result: Any, name: str) -> None:
         lines.extend(["", "### data", str(value)])
     else:
         lines.append(f"{name}: {value}")
+
+
+def _report_event_detail(progress: ProgressReporter | None, event: CalendarEvent) -> None:
+    _report(progress, "Lark event detail:")
+    _report(progress, "  title: %s", _display_value(event.summary))
+    _report(progress, "  start: %s", event.start.isoformat())
+    _report(progress, "  end: %s", event.end.isoformat())
+    _report(progress, "  location: %s", _display_value(event.location))
+    _report(progress, "  source_id: %s", event.source_id)
+
+
+def _display_value(value: str) -> str:
+    return value if value else "<empty>"
 
 
 def _report(progress: ProgressReporter | None, message: str, *args: object) -> None:

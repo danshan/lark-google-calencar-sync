@@ -104,8 +104,57 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "Lark CalDAV selected raw results: 1",
         "Lark event: source_id=lark-1 start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
+        "Lark event detail:",
+        "  title: Planning",
+        "  start: 2026-06-17T10:00:00+00:00",
+        "  end: 2026-06-17T11:00:00+00:00",
+        "  location: Room A",
+        "  source_id: lark-1",
     ]
     assert "secret" not in "\n".join(messages)
+
+
+def test_list_lark_events_formats_empty_location(monkeypatch):
+    class NoLocationComponent(FakeComponent):
+        def __init__(self):
+            super().__init__()
+            del self.location
+
+    class NoLocationVobject:
+        def components(self):
+            return [NoLocationComponent()]
+
+    class NoLocationResult(FakeResult):
+        vobject_instance = NoLocationVobject()
+
+    class NoLocationCalendar(FakeCalendar):
+        def search(self, *, start, end, event=None, expand=None):
+            return [NoLocationResult()]
+
+    class NoLocationClient(FakeClient):
+        def calendar(self, *, url):
+            return NoLocationCalendar()
+
+    messages: list[str] = []
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", NoLocationClient)
+
+    list_lark_events(
+        config,
+        datetime(2026, 6, 17, 10, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 11, 0, tzinfo=UTC),
+        progress=messages.append,
+        verbose=True,
+        use_sync_token=False,
+    )
+
+    assert "  location: <empty>" in messages
 
 
 def test_list_lark_events_dumps_raw_response(monkeypatch, tmp_path):
