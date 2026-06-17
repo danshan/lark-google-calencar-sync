@@ -46,7 +46,7 @@ class FakeResult:
 class FakeCalendar:
     url = "https://caldav.example.com/calendars/alice/work"
 
-    def search(self, *, start, end, event, expand):
+    def search(self, *, start, end, event=None, expand=None):
         return [FakeResult()]
 
 
@@ -80,9 +80,11 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "Lark CalDAV host: https://caldav.example.com",
         "Lark CalDAV username: alice",
         "Lark CalDAV calendar URL: https://caldav.example.com/calendars/alice/work",
-        "Lark CalDAV search: start=2026-06-17T10:00:00+00:00 "
-        "end=2026-06-17T11:00:00+00:00 event=True expand=True",
-        "Lark CalDAV raw results: 1",
+        "Lark CalDAV search window: start=2026-06-17T10:00:00+00:00 "
+        "end=2026-06-17T11:00:00+00:00",
+        "Lark CalDAV attempt 1: date range events with recurrence expansion",
+        "Lark CalDAV attempt 1 raw results: 1",
+        "Lark CalDAV selected raw results: 1",
         "Lark event: source_id=lark-1 start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
     ]
@@ -120,7 +122,7 @@ def test_list_lark_events_dumps_zero_result_response(monkeypatch, tmp_path):
     class EmptyCalendar:
         url = "https://caldav.example.com/calendars/alice/work"
 
-        def search(self, *, start, end, event, expand):
+        def search(self, *, start, end, event=None, expand=None):
             return []
 
     class EmptyClient(FakeClient):
@@ -144,3 +146,61 @@ def test_list_lark_events_dumps_zero_result_response(monkeypatch, tmp_path):
     dump = dump_path.read_text(encoding="utf-8")
     assert "raw_result_count: 0" in dump
     assert "No CalDAV object resources were returned by calendar.search()." in dump
+
+
+def test_list_lark_events_retries_with_more_permissive_search(monkeypatch, tmp_path):
+    class FallbackCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def __init__(self):
+            self.calls = []
+
+        def search(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs == {"start": start, "end": end, "event": True, "expand": True}:
+                return []
+            if kwargs == {"start": start, "end": end, "event": True, "expand": False}:
+                return [FakeResult()]
+            raise AssertionError(f"unexpected search kwargs: {kwargs}")
+
+    calendar = FallbackCalendar()
+
+    class FallbackClient(FakeClient):
+        def calendar(self, *, url):
+            return calendar
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+    start = datetime(2026, 6, 17, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 6, 17, 11, 0, tzinfo=UTC)
+    dump_path = tmp_path / "lark-response.txt"
+    messages: list[str] = []
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", FallbackClient)
+
+    events = list_lark_events(
+        config,
+        start,
+        end,
+        progress=messages.append,
+        verbose=True,
+        dump_response_path=dump_path,
+    )
+
+    assert [event.source_id for event in events] == ["lark-1"]
+    assert calendar.calls == [
+        {"start": start, "end": end, "event": True, "expand": True},
+        {"start": start, "end": end, "event": True, "expand": False},
+    ]
+    assert "Lark CalDAV attempt 1 raw results: 0" in messages
+    assert "Lark CalDAV attempt 2 raw results: 1" in messages
+    dump = dump_path.read_text(encoding="utf-8")
+    assert "attempt: 1" in dump
+    assert "event: True" in dump
+    assert "expand: True" in dump
+    assert "attempt: 2" in dump
+    assert "expand: False" in dump

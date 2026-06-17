@@ -14,6 +14,7 @@ from cal_sync.models import CalendarEvent
 
 LOGGER = logging.getLogger(__name__)
 ProgressReporter = Callable[[str], None]
+SearchAttempt = tuple[str, dict[str, object]]
 
 
 def list_lark_calendars(config: CaldavConfig) -> list[tuple[str, str]]:
@@ -32,13 +33,14 @@ def list_lark_events(
     verbose: bool = False,
     dump_response_path: Path | None = None,
 ) -> list[CalendarEvent]:
+    attempts = _search_attempts(start, end)
     if verbose:
         _report(progress, "Lark CalDAV host: %s", config.host)
         _report(progress, "Lark CalDAV username: %s", config.username)
         _report(progress, "Lark CalDAV calendar URL: %s", config.calendar_url or "<first calendar>")
         _report(
             progress,
-            "Lark CalDAV search: start=%s end=%s event=True expand=True",
+            "Lark CalDAV search window: start=%s end=%s",
             start.isoformat(),
             end.isoformat(),
         )
@@ -52,19 +54,33 @@ def list_lark_events(
     )
 
     calendar = _get_calendar(config)
-    results = calendar.search(start=start, end=end, event=True, expand=True)
+    attempt_results = _search_lark_calendar(calendar, attempts)
+    results = attempt_results[-1][2] if attempt_results else []
     if dump_response_path is not None:
         _dump_lark_response(
             dump_response_path,
             config=config,
             start=start,
             end=end,
-            results=results,
+            attempt_results=attempt_results,
         )
         _report(progress, "Wrote raw Lark CalDAV response dump to %s", dump_response_path)
-    LOGGER.info("Lark CalDAV raw results: count=%s", len(results))
+
+    for index, (label, parameters, attempt_items) in enumerate(attempt_results, start=1):
+        LOGGER.info(
+            "Lark CalDAV attempt %s: label=%s parameters=%s raw_count=%s",
+            index,
+            label,
+            _format_search_parameters(parameters),
+            len(attempt_items),
+        )
+        if verbose:
+            _report(progress, "Lark CalDAV attempt %s: %s", index, label)
+            _report(progress, "Lark CalDAV attempt %s raw results: %s", index, len(attempt_items))
+
+    LOGGER.info("Lark CalDAV selected raw results: count=%s", len(results))
     if verbose:
-        _report(progress, "Lark CalDAV raw results: %s", len(results))
+        _report(progress, "Lark CalDAV selected raw results: %s", len(results))
 
     events = [_caldav_result_to_event(result) for result in results]
     if verbose and not events:
@@ -132,13 +148,43 @@ def _as_datetime(value: Any) -> datetime:
     return isoparse(str(value))
 
 
+def _search_attempts(start: datetime, end: datetime) -> list[SearchAttempt]:
+    return [
+        (
+            "date range events with recurrence expansion",
+            {"start": start, "end": end, "event": True, "expand": True},
+        ),
+        (
+            "date range events without recurrence expansion",
+            {"start": start, "end": end, "event": True, "expand": False},
+        ),
+        (
+            "date range without component or expansion filters",
+            {"start": start, "end": end},
+        ),
+    ]
+
+
+def _search_lark_calendar(
+    calendar: Any,
+    attempts: list[SearchAttempt],
+) -> list[tuple[str, dict[str, object], list[Any]]]:
+    attempt_results: list[tuple[str, dict[str, object], list[Any]]] = []
+    for label, parameters in attempts:
+        results = calendar.search(**parameters)
+        attempt_results.append((label, parameters, results))
+        if results:
+            break
+    return attempt_results
+
+
 def _dump_lark_response(
     path: Path,
     *,
     config: CaldavConfig,
     start: datetime,
     end: datetime,
-    results: list[Any],
+    attempt_results: list[tuple[str, dict[str, object], list[Any]]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -150,37 +196,57 @@ def _dump_lark_response(
         f"calendar_url: {config.calendar_url or '<first calendar>'}",
         f"start: {start.isoformat()}",
         f"end: {end.isoformat()}",
-        "event: True",
-        "expand: True",
         "",
         "## Response",
-        f"raw_result_count: {len(results)}",
+        f"attempt_count: {len(attempt_results)}",
     ]
-    if not results:
+    selected_results = attempt_results[-1][2] if attempt_results else []
+    lines.append(f"raw_result_count: {len(selected_results)}")
+    if not selected_results:
         lines.append("No CalDAV object resources were returned by calendar.search().")
 
-    for index, result in enumerate(results, start=1):
+    for attempt_index, (label, parameters, results) in enumerate(attempt_results, start=1):
         lines.extend(
             [
                 "",
-                f"## Result {index}",
-                f"type: {type(result).__module__}.{type(result).__qualname__}",
+                f"## Attempt {attempt_index}",
+                f"attempt: {attempt_index}",
+                f"label: {label}",
+                f"raw_result_count: {len(results)}",
+                "parameters:",
+                _format_search_parameters(parameters),
             ]
         )
-        _append_attr(lines, result, "url")
-        _append_attr(lines, result, "etag")
-        _append_attr(lines, result, "id")
-        _append_attr(lines, result, "canonical_url")
-        _append_attr(lines, result, "data")
-        vobject_instance = getattr(result, "vobject_instance", None)
-        if vobject_instance is not None:
-            lines.extend(["", "### vobject_instance.serialize()"])
-            serialize = getattr(vobject_instance, "serialize", None)
-            if callable(serialize):
-                lines.append(str(serialize()))
-            else:
-                lines.append(str(vobject_instance))
+        for result_index, result in enumerate(results, start=1):
+            lines.extend(
+                [
+                    "",
+                    f"### Attempt {attempt_index} Result {result_index}",
+                    f"type: {type(result).__module__}.{type(result).__qualname__}",
+                ]
+            )
+            _append_attr(lines, result, "url")
+            _append_attr(lines, result, "etag")
+            _append_attr(lines, result, "id")
+            _append_attr(lines, result, "canonical_url")
+            _append_attr(lines, result, "data")
+            vobject_instance = getattr(result, "vobject_instance", None)
+            if vobject_instance is not None:
+                lines.extend(["", "#### vobject_instance.serialize()"])
+                serialize = getattr(vobject_instance, "serialize", None)
+                if callable(serialize):
+                    lines.append(str(serialize()))
+                else:
+                    lines.append(str(vobject_instance))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _format_search_parameters(parameters: dict[str, object]) -> str:
+    lines = []
+    for key, value in parameters.items():
+        rendered = value.isoformat() if isinstance(value, datetime) else str(value)
+        lines.append(f"{key}: {rendered}")
+    return "\n".join(lines)
 
 
 def _append_attr(lines: list[str], result: Any, name: str) -> None:
