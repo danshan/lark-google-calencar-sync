@@ -499,6 +499,7 @@ def test_list_lark_events_filters_sync_loaded_objects_locally(monkeypatch):
         password="secret",
         calendar_url="https://caldav.example.com/calendars/alice/work",
     )
+    messages: list[str] = []
 
     monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", SyncClient)
 
@@ -506,7 +507,11 @@ def test_list_lark_events_filters_sync_loaded_objects_locally(monkeypatch):
         config,
         datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
         datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+        progress=messages.append,
+        verbose=True,
         use_sync_token=True,
     )
 
     assert [event.source_id for event in events] == ["lark-1"]
+    assert "Skipped Lark CalDAV objects outside sync window: 1" in messages
+    assert not any("reason=outside sync window" in message for message in messages)

@@ -176,20 +176,32 @@ def _caldav_results_to_events(
     verbose: bool,
 ) -> list[CalendarEvent]:
     events = []
+    outside_window_count = 0
     for result in results:
         event, skip_reason = _caldav_result_to_event(result)
         if event is None:
             _report_skipped_object(progress, verbose, result, skip_reason or "unparsed object")
             continue
         if not _event_overlaps_window(event, start, end):
-            _report_skipped_object(
-                progress,
-                verbose,
-                result,
-                f"outside sync window source_id={event.source_id}",
+            outside_window_count += 1
+            LOGGER.debug(
+                "Skipped Lark CalDAV object outside sync window: source_id=%s identity=%s",
+                event.source_id,
+                _result_identity(result),
             )
             continue
         events.append(event)
+    if outside_window_count:
+        LOGGER.info(
+            "Skipped Lark CalDAV objects outside sync window: count=%s",
+            outside_window_count,
+        )
+        if verbose:
+            _report(
+                progress,
+                "Skipped Lark CalDAV objects outside sync window: %s",
+                outside_window_count,
+            )
     return events
 
 
