@@ -60,10 +60,11 @@ class FakeCalendar:
 
 
 class FakeClient:
-    def __init__(self, *, url, username, password):
+    def __init__(self, *, url, username, password, timeout=None):
         self.url = url
         self.username = username
         self.password = password
+        self.timeout = timeout
 
     def calendar(self, *, url):
         return FakeCalendar()
@@ -91,10 +92,9 @@ def test_list_lark_events_reports_verbose_details_without_password(monkeypatch):
         "Lark CalDAV calendar URL: https://caldav.example.com/calendars/alice/work",
         "Lark CalDAV search window: start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00",
-        "Lark CalDAV attempt 1: sync-token object loading",
-        "Lark CalDAV attempt 1 raw results: 0",
-        "Lark CalDAV attempt 2: date range events with recurrence expansion",
-        "Lark CalDAV attempt 2 raw results: 1",
+        "Starting Lark CalDAV attempt 1: date range events with recurrence expansion",
+        "Lark CalDAV attempt 1: date range events with recurrence expansion",
+        "Lark CalDAV attempt 1 raw results: 1",
         "Lark CalDAV selected raw results: 1",
         "Lark event: source_id=lark-1 start=2026-06-17T10:00:00+00:00 "
         "end=2026-06-17T11:00:00+00:00 summary=Planning",
@@ -208,15 +208,12 @@ def test_list_lark_events_retries_with_more_permissive_search(monkeypatch, tmp_p
         {"start": start, "end": end, "event": True, "expand": False},
     ]
     assert "Lark CalDAV attempt 1 raw results: 0" in messages
-    assert "Lark CalDAV attempt 2 raw results: 0" in messages
-    assert "Lark CalDAV attempt 3 raw results: 1" in messages
+    assert "Lark CalDAV attempt 2 raw results: 1" in messages
     dump = dump_path.read_text(encoding="utf-8")
     assert "attempt: 1" in dump
-    assert "sync_token: None" in dump
-    assert "attempt: 2" in dump
     assert "event: True" in dump
     assert "expand: True" in dump
-    assert "attempt: 3" in dump
+    assert "attempt: 2" in dump
     assert "expand: False" in dump
 
 
@@ -265,6 +262,7 @@ def test_list_lark_events_prefers_sync_token_object_loading(monkeypatch):
         config,
         datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
         datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+        use_sync_token=True,
     )
 
     assert [event.source_id for event in events] == ["lark-1"]
@@ -323,6 +321,7 @@ def test_list_lark_events_filters_sync_loaded_objects_locally(monkeypatch):
         config,
         datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
         datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+        use_sync_token=True,
     )
 
     assert [event.source_id for event in events] == ["lark-1"]

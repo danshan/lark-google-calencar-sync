@@ -14,6 +14,7 @@ class CaldavConfig(BaseModel):
     username: str = ""
     password: str = ""
     calendar_url: str = ""
+    timeout_seconds: int = Field(default=30, ge=1)
 
 
 class GoogleConfig(BaseModel):
@@ -51,4 +52,3 @@ class AppConfig(BaseModel):
         config_path = path or self.default_path()
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(tomli_w.dumps(self.model_dump(mode="json")), encoding="utf-8")
-

@@ -69,6 +69,13 @@ def sync(
             help="Write raw Lark CalDAV search results to a local diagnostic file.",
         ),
     ] = None,
+    lark_sync_token: Annotated[
+        bool,
+        typer.Option(
+            "--lark-sync-token",
+            help="Try CalDAV sync-collection before search. May hang on some servers.",
+        ),
+    ] = False,
 ) -> None:
     app_config = AppConfig.load(config)
     if dry_run is not None:
@@ -80,6 +87,7 @@ def sync(
         progress=typer.echo,
         verbose=verbose,
         dump_lark_response_path=dump_lark_response,
+        use_lark_sync_token=lark_sync_token,
     )
     typer.echo(
         f"create={len(plan.to_create)} update={len(plan.to_update)} "

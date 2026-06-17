@@ -22,6 +22,7 @@ def sync_once(
     *,
     verbose: bool = False,
     dump_lark_response_path: Path | None = None,
+    use_lark_sync_token: bool = False,
 ) -> SyncPlan:
     configure_logging(config.log_path)
     start, end = sync_window(config.sync.past_days, config.sync.future_days)
@@ -36,6 +37,7 @@ def sync_once(
         progress=progress,
         verbose=verbose,
         dump_response_path=dump_lark_response_path,
+        use_sync_token=use_lark_sync_token,
     )
     LOGGER.info("Loaded Lark events: count=%s", len(lark_events))
     _report(progress, "Loaded %s Lark events.", len(lark_events))

@@ -19,7 +19,12 @@ SearchAttempt = tuple[str, dict[str, object]]
 
 
 def list_lark_calendars(config: CaldavConfig) -> list[tuple[str, str]]:
-    with DAVClient(url=config.host, username=config.username, password=config.password) as client:
+    with DAVClient(
+        url=config.host,
+        username=config.username,
+        password=config.password,
+        timeout=config.timeout_seconds,
+    ) as client:
         principal = client.principal()
         calendars = principal.get_calendars()
         return [(calendar.get_display_name(), str(calendar.url)) for calendar in calendars]
@@ -33,6 +38,7 @@ def list_lark_events(
     progress: ProgressReporter | None = None,
     verbose: bool = False,
     dump_response_path: Path | None = None,
+    use_sync_token: bool = False,
 ) -> list[CalendarEvent]:
     attempts = _search_attempts(start, end)
     if verbose:
@@ -55,12 +61,27 @@ def list_lark_events(
     )
 
     calendar = _get_calendar(config)
-    sync_attempt_result = _load_lark_objects_by_sync_token(calendar)
-    attempt_results = [sync_attempt_result]
-    if sync_attempt_result[2]:
+    if use_sync_token:
+        if verbose:
+            _report(progress, "Starting Lark CalDAV attempt 1: sync-token object loading")
+        sync_attempt_result = _load_lark_objects_by_sync_token(calendar)
+        attempt_results = [sync_attempt_result]
+        start_index = 2
+    else:
+        attempt_results = []
+        sync_attempt_result = None
+        start_index = 1
+
+    if sync_attempt_result is not None and sync_attempt_result[2]:
         results = sync_attempt_result[2]
     else:
-        search_attempt_results = _search_lark_calendar(calendar, attempts)
+        search_attempt_results = _search_lark_calendar(
+            calendar,
+            attempts,
+            progress=progress,
+            verbose=verbose,
+            start_index=start_index,
+        )
         attempt_results.extend(search_attempt_results)
         results = search_attempt_results[-1][2] if search_attempt_results else []
     if dump_response_path is not None:
@@ -118,7 +139,12 @@ def list_lark_events(
 
 
 def _get_calendar(config: CaldavConfig) -> Any:
-    client = DAVClient(url=config.host, username=config.username, password=config.password)
+    client = DAVClient(
+        url=config.host,
+        username=config.username,
+        password=config.password,
+        timeout=config.timeout_seconds,
+    )
     if config.calendar_url:
         return client.calendar(url=config.calendar_url)
     calendars = client.principal().get_calendars()
@@ -203,10 +229,21 @@ def _search_attempts(start: datetime, end: datetime) -> list[SearchAttempt]:
 def _search_lark_calendar(
     calendar: Any,
     attempts: list[SearchAttempt],
+    *,
+    progress: ProgressReporter | None = None,
+    verbose: bool = False,
+    start_index: int = 1,
 ) -> list[tuple[str, dict[str, object], list[Any]]]:
     attempt_results: list[tuple[str, dict[str, object], list[Any]]] = []
-    for label, parameters in attempts:
-        results = calendar.search(**parameters)
+    for offset, (label, parameters) in enumerate(attempts):
+        attempt_index = start_index + offset
+        if verbose:
+            _report(progress, "Starting Lark CalDAV attempt %s: %s", attempt_index, label)
+        try:
+            results = calendar.search(**parameters)
+        except Exception as exc:
+            LOGGER.info("Lark CalDAV search attempt failed: label=%s error=%s", label, exc)
+            results = []
         attempt_results.append((label, parameters, results))
         if results:
             break
