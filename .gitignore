@@ -1,0 +1,12 @@
+.venv/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Local runtime state. These files contain credentials, tokens, and local logs.
+config.toml
+*.token.json
+*.credentials.json
+*.log
+
