@@ -116,3 +116,7 @@ sync token and local event cache, so they only need CalDAV changes from Feishu
 and then filter the configured date window locally. The date-range CalDAV search
 path is intentionally not used because Feishu returns empty results for it in
 this environment.
+
+Recurring Lark events with `RRULE` are expanded into individual Google Calendar
+events within the configured sync window. Each occurrence gets a stable
+source ID based on the Lark event UID and occurrence start time.

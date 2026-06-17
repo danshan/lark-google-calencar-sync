@@ -15,6 +15,7 @@ class CalendarEvent(BaseModel):
     end: datetime
     updated_at: datetime | None = None
     etag: str | None = None
+    recurrence_rule: str | None = None
 
     @property
     def is_managed_google_event(self) -> bool:
@@ -28,4 +29,3 @@ class CalendarEvent(BaseModel):
             self.start,
             self.end,
         )
-

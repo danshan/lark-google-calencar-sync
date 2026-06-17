@@ -10,6 +10,7 @@ from typing import Any
 from caldav import DAVClient
 from caldav.lib import error as caldav_error
 from dateutil.parser import isoparse
+from dateutil.rrule import rrulestr
 
 from cal_sync.config import CaldavConfig
 from cal_sync.models import CalendarEvent
@@ -17,6 +18,7 @@ from cal_sync.models import CalendarEvent
 LOGGER = logging.getLogger(__name__)
 ProgressReporter = Callable[[str], None]
 AttemptResult = tuple[str, dict[str, object], list[Any]]
+LARK_STATE_SCHEMA_VERSION = 2
 
 
 class LarkCaldavAuthenticationError(RuntimeError):
@@ -194,6 +196,12 @@ def _load_lark_state(path: Path | None) -> LarkState:
         )
         return LarkState()
     raw_events = data.get("events_by_url", {})
+    if data.get("schema_version") != LARK_STATE_SCHEMA_VERSION:
+        LOGGER.info(
+            "Lark state schema changed, starting from empty state: path=%s",
+            path,
+        )
+        return LarkState()
     events_by_url = {}
     if isinstance(raw_events, dict):
         for url, event_data in raw_events.items():
@@ -213,6 +221,7 @@ def _save_lark_state(path: Path | None, state: LarkState) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
+        "schema_version": LARK_STATE_SCHEMA_VERSION,
         "sync_token": state.sync_token,
         "events_by_url": {
             url: event.model_dump(mode="json")
@@ -262,10 +271,11 @@ def _events_in_window(
     window_events = []
     outside_window_count = 0
     for event in events:
-        if not _event_overlaps_window(event, start, end):
+        expanded_events = _expand_event_in_window(event, start, end)
+        if not expanded_events:
             outside_window_count += 1
             continue
-        window_events.append(event)
+        window_events.extend(expanded_events)
     if outside_window_count:
         LOGGER.info(
             "Skipped cached Lark events outside sync window: count=%s",
@@ -278,6 +288,42 @@ def _events_in_window(
                 outside_window_count,
             )
     return sorted(window_events, key=lambda event: (event.start, event.end, event.source_id))
+
+
+def _expand_event_in_window(
+    event: CalendarEvent,
+    start: datetime,
+    end: datetime,
+) -> list[CalendarEvent]:
+    if not event.recurrence_rule:
+        return [event] if _event_overlaps_window(event, start, end) else []
+
+    duration = event.end - event.start
+    try:
+        recurrence = rrulestr(event.recurrence_rule, dtstart=event.start)
+        occurrences = recurrence.between(start - duration, end, inc=True)
+    except Exception as exc:
+        LOGGER.info(
+            "Failed to expand recurring Lark event: source_id=%s rule=%s error=%s",
+            event.source_id,
+            event.recurrence_rule,
+            exc,
+        )
+        return [event] if _event_overlaps_window(event, start, end) else []
+
+    expanded_events = []
+    for occurrence_start in occurrences:
+        occurrence_end = occurrence_start + duration
+        occurrence = event.model_copy(
+            update={
+                "source_id": f"{event.source_id}:{occurrence_start.isoformat()}",
+                "start": occurrence_start,
+                "end": occurrence_end,
+            }
+        )
+        if _event_overlaps_window(occurrence, start, end):
+            expanded_events.append(occurrence)
+    return expanded_events
 
 
 def _caldav_result_to_event(result: Any) -> tuple[CalendarEvent | None, str | None]:
@@ -305,6 +351,7 @@ def _caldav_result_to_event(result: Any) -> tuple[CalendarEvent | None, str | No
                 end=_as_datetime(component.dtend.value),
                 updated_at=_optional_datetime(getattr(component, "last_modified", None)),
                 etag=_safe_attr(result, "etag"),
+                recurrence_rule=_component_optional_text(component, "rrule"),
             ),
             None,
         )
@@ -313,8 +360,12 @@ def _caldav_result_to_event(result: Any) -> tuple[CalendarEvent | None, str | No
 
 
 def _component_text(component: Any, name: str) -> str:
+    return _component_optional_text(component, name) or ""
+
+
+def _component_optional_text(component: Any, name: str) -> str | None:
     value = getattr(component, name, None)
-    return str(value.value) if value is not None else ""
+    return str(value.value) if value is not None else None
 
 
 def _optional_datetime(value: Any) -> datetime | None:

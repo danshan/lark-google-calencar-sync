@@ -248,6 +248,7 @@ def test_list_lark_events_uses_saved_sync_token_and_cache(monkeypatch, tmp_path)
     state_path.write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "sync_token": "sync-token-old",
                 "events_by_url": {
                     "https://caldav.example.com/calendars/alice/work/lark-1.ics": {
@@ -320,10 +321,135 @@ def test_list_lark_events_uses_saved_sync_token_and_cache(monkeypatch, tmp_path)
         "disable_fallback": True,
     }
     saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 2
     assert saved["sync_token"] == "sync-token-new"
     assert sorted(event["source_id"] for event in saved["events_by_url"].values()) == [
         "lark-1",
         "lark-2",
+    ]
+
+
+def test_list_lark_events_ignores_legacy_state_without_schema_version(monkeypatch, tmp_path):
+    state_path = tmp_path / "lark-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "sync_token": "sync-token-old",
+                "events_by_url": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class SyncCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def __init__(self):
+            self.sync_kwargs = None
+
+        def get_objects_by_sync_token(
+            self,
+            *,
+            sync_token=None,
+            load_objects=False,
+            disable_fallback=False,
+        ):
+            self.sync_kwargs = {
+                "sync_token": sync_token,
+                "load_objects": load_objects,
+                "disable_fallback": disable_fallback,
+            }
+            return FakeSyncCollection([FakeResult()])
+
+    calendar = SyncCalendar()
+
+    class SyncClient(FakeClient):
+        def calendar(self, *, url):
+            return calendar
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+        state_path=state_path,
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", SyncClient)
+
+    list_lark_events(
+        config,
+        datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+    )
+
+    assert calendar.sync_kwargs == {
+        "sync_token": None,
+        "load_objects": True,
+        "disable_fallback": True,
+    }
+
+
+def test_list_lark_events_expands_recurring_events_in_window(monkeypatch):
+    class RecurringComponent(FakeComponent):
+        def __init__(self):
+            super().__init__()
+            self.uid = FakeText("recurring-1")
+            self.summary = FakeText("Weekly Review")
+            self.dtstart = FakeText(datetime(2026, 6, 1, 10, 0, tzinfo=UTC))
+            self.dtend = FakeText(datetime(2026, 6, 1, 11, 0, tzinfo=UTC))
+            self.rrule = FakeText("FREQ=WEEKLY;COUNT=4")
+
+    class RecurringVobject:
+        def components(self):
+            return [RecurringComponent()]
+
+    class RecurringResult(FakeResult):
+        url = "https://caldav.example.com/calendars/alice/work/recurring-1.ics"
+        vobject_instance = RecurringVobject()
+
+    class RecurringCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def get_objects_by_sync_token(
+            self,
+            *,
+            sync_token=None,
+            load_objects=False,
+            disable_fallback=False,
+        ):
+            return FakeSyncCollection([RecurringResult()])
+
+    class RecurringClient(FakeClient):
+        def calendar(self, *, url):
+            return RecurringCalendar()
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", RecurringClient)
+
+    events = list_lark_events(
+        config,
+        datetime(2026, 6, 14, 0, 0, tzinfo=UTC),
+        datetime(2026, 6, 24, 0, 0, tzinfo=UTC),
+    )
+
+    assert [event.source_id for event in events] == [
+        "recurring-1:2026-06-15T10:00:00+00:00",
+        "recurring-1:2026-06-22T10:00:00+00:00",
+    ]
+    assert [event.start for event in events] == [
+        datetime(2026, 6, 15, 10, 0, tzinfo=UTC),
+        datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
+    ]
+    assert [event.end for event in events] == [
+        datetime(2026, 6, 15, 11, 0, tzinfo=UTC),
+        datetime(2026, 6, 22, 11, 0, tzinfo=UTC),
     ]
 
 
