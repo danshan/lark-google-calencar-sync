@@ -22,6 +22,49 @@ ${XDG_CONFIG_HOME:-~/.config}/lark-google-calendar-sync/config.toml
 The file contains CalDAV credentials, the Lark sync state path, Google OAuth
 paths, sync date range, and log path. It must not be committed to Git.
 
+## Google setup
+
+The init wizard asks for two Google values.
+
+### Google Calendar ID
+
+Use `primary` when syncing to your default Google Calendar.
+
+For a non-default calendar:
+
+1. Open [Google Calendar](https://calendar.google.com/).
+2. In the left sidebar, find the calendar.
+3. Open the calendar menu and choose `Settings and sharing`.
+4. Find `Integrate calendar`.
+5. Copy `Calendar ID`.
+
+Personal calendar IDs often look like an email address. Shared calendar IDs can
+look like `example.com_abc123@group.calendar.google.com`.
+
+### Google OAuth client JSON path
+
+This is the local path to a downloaded Google OAuth desktop client JSON file.
+
+To create it:
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/).
+2. Create or select a project.
+3. Enable `Google Calendar API` for the project.
+4. Open `APIs & Services` -> `OAuth consent screen` and finish the required
+   setup.
+5. Open `APIs & Services` -> `Credentials`.
+6. Choose `Create credentials` -> `OAuth client ID`.
+7. Select `Desktop app` as the application type.
+8. Download the JSON file.
+9. Store it outside the repository, for example:
+
+```text
+${XDG_CONFIG_HOME:-~/.config}/lark-google-calendar-sync/google.credentials.json
+```
+
+When the wizard asks for `Google OAuth client JSON path`, enter the full local
+path to that downloaded JSON file.
+
 ## Usage
 
 Create a Google OAuth desktop client JSON file in Google Cloud Console, then run:
