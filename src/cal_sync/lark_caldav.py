@@ -85,7 +85,7 @@ def list_lark_events(
         state.sync_token,
     )
     attempt_results: list[AttemptResult] = [(label, parameters, results)]
-    if not results:
+    if state.sync_token is None and not results:
         if verbose:
             _report(progress, "Starting Lark CalDAV attempt 2: full object fallback")
         label, parameters, results = _load_lark_objects_by_full_collection(calendar)

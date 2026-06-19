@@ -692,6 +692,78 @@ def test_list_lark_events_falls_back_to_full_objects_when_sync_token_returns_no_
     assert calendar.search_called is False
 
 
+def test_list_lark_events_does_not_fallback_when_cached_sync_token_has_no_changes(
+    monkeypatch,
+    tmp_path,
+):
+    state_path = tmp_path / "lark-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "sync_token": "sync-token-old",
+                "events_by_url": {
+                    "https://caldav.example.com/calendars/alice/work/lark-1.ics": {
+                        "source_id": "lark-1",
+                        "summary": "Planning",
+                        "description": "Discuss roadmap",
+                        "location": "Room A",
+                        "start": "2026-06-17T10:00:00+00:00",
+                        "end": "2026-06-17T11:00:00+00:00",
+                        "updated_at": None,
+                        "etag": "etag-1",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class SyncCalendar:
+        url = "https://caldav.example.com/calendars/alice/work"
+
+        def __init__(self):
+            self.get_objects_called = False
+
+        def get_objects_by_sync_token(
+            self,
+            *,
+            sync_token=None,
+            load_objects=False,
+            disable_fallback=False,
+        ):
+            return FakeSyncCollection([], sync_token="sync-token-new")
+
+        def get_objects(self, **kwargs):
+            self.get_objects_called = True
+            return [FakeResult()]
+
+    calendar = SyncCalendar()
+
+    class SyncClient(FakeClient):
+        def calendar(self, *, url):
+            return calendar
+
+    config = CaldavConfig(
+        host="https://caldav.example.com",
+        username="alice",
+        password="secret",
+        calendar_url="https://caldav.example.com/calendars/alice/work",
+        state_path=state_path,
+    )
+
+    monkeypatch.setattr("cal_sync.lark_caldav.DAVClient", SyncClient)
+
+    events = list_lark_events(
+        config,
+        datetime(2026, 6, 17, 9, 0, tzinfo=UTC),
+        datetime(2026, 6, 17, 12, 0, tzinfo=UTC),
+    )
+
+    assert [event.source_id for event in events] == ["lark-1"]
+    assert calendar.get_objects_called is False
+
+
 def test_list_lark_events_skips_sync_loaded_objects_without_vobject(monkeypatch, tmp_path):
     class EmptyResult(FakeResult):
         url = "https://caldav.example.com/calendars/alice/work/empty.ics"
