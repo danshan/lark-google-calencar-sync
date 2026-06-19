@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from caldav import DAVClient
 from caldav.lib import error as caldav_error
@@ -18,7 +19,7 @@ from cal_sync.models import CalendarEvent
 LOGGER = logging.getLogger(__name__)
 ProgressReporter = Callable[[str], None]
 AttemptResult = tuple[str, dict[str, object], list[Any]]
-LARK_STATE_SCHEMA_VERSION = 2
+LARK_STATE_SCHEMA_VERSION = 4
 
 
 class LarkCaldavAuthenticationError(RuntimeError):
@@ -84,6 +85,12 @@ def list_lark_events(
         state.sync_token,
     )
     attempt_results: list[AttemptResult] = [(label, parameters, results)]
+    if not results:
+        if verbose:
+            _report(progress, "Starting Lark CalDAV attempt 2: full object fallback")
+        label, parameters, results = _load_lark_objects_by_full_collection(calendar)
+        attempt_results.append((label, parameters, results))
+
     if dump_response_path is not None:
         _dump_lark_response(
             dump_response_path,
@@ -410,6 +417,24 @@ def _load_lark_objects_by_sync_token(
     )
 
 
+def _load_lark_objects_by_full_collection(
+    calendar: Any,
+) -> tuple[str, dict[str, object], list[Any]]:
+    parameters = {
+        "load_objects": True,
+        "disable_fallback": False,
+    }
+    try:
+        return ("full object fallback", parameters, list(calendar.get_objects(**parameters)))
+    except caldav_error.AuthorizationError as exc:
+        raise LarkCaldavAuthenticationError(
+            "Lark CalDAV authorization failed. Check host, username, and password."
+        ) from exc
+    except (caldav_error.ReportError, caldav_error.DAVError, AttributeError) as exc:
+        LOGGER.info("Lark CalDAV full object fallback failed: %s", exc)
+        return ("full object fallback", parameters, [])
+
+
 def _dump_lark_response(
     path: Path,
     *,
@@ -528,7 +553,15 @@ def _result_identity(result: Any) -> str:
 
 def _result_url(result: Any) -> str | None:
     value = _safe_attr_without_logging(result, "url")
-    return str(value) if value else None
+    return _normalize_url(str(value)) if value else None
+
+
+def _normalize_url(value: str) -> str:
+    parsed = urlsplit(value)
+    netloc = parsed.netloc
+    if (parsed.scheme, parsed.port) in {("https", 443), ("http", 80)}:
+        netloc = parsed.hostname or parsed.netloc
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _safe_attr_without_logging(result: Any, name: str) -> Any:
